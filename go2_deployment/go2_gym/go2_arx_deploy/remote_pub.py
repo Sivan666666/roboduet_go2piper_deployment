@@ -111,14 +111,14 @@ def main():
                 while not shutdown:
                     action, a, b, x, y, _,_ = get_handles_msg(sock, offset)
                     if x == 1:
-                        arm_pose_msg.data = start_pos[0:6]
+                        arm_pose_msg.ee_pose = start_pos[0:6]
                         
                         lcm_node.publish("arm_control_data", arm_pose_msg.encode())
 
                         break
                     
                     if a == 1:
-                        arm_pose_msg.data = start_pos[0:6]
+                        arm_pose_msg.ee_pose = start_pos[0:6]
                         
                         lcm_node.publish("arm_control_data", arm_pose_msg.encode())
 

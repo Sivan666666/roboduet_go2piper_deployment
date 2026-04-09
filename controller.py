@@ -8,6 +8,15 @@ except ImportError:
     print("Please install openvr: pip install openvr")
     sys.exit(1)
 
+
+# OpenVR frame: +x right, +y up, +z toward the user.
+# Robot control frame: +x forward, +y left, +z up.
+VR_TO_ROBOT_BASIS = np.array([
+    [0.0, 0.0, -1.0],
+    [-1.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0],
+], dtype=np.float32)
+
 class Controller:
     def __init__(self):
         print("Initializing OpenVR System...")
@@ -22,6 +31,27 @@ class Controller:
 
     def _get_button_state(self, controller_state, button_id):
         return (controller_state.ulButtonPressed & (1 << button_id)) != 0
+
+    @staticmethod
+    def _matrix_to_rpy(rot):
+        pitch = np.arcsin(np.clip(-rot[2, 0], -1.0, 1.0))
+        if np.abs(rot[2, 0]) < 0.999999:
+            roll = np.arctan2(rot[2, 1], rot[2, 2])
+            yaw = np.arctan2(rot[1, 0], rot[0, 0])
+        else:
+            roll = 0.0
+            yaw = np.arctan2(-rot[0, 1], rot[1, 1])
+        return roll, pitch, yaw
+
+    @staticmethod
+    def _vr_pose_to_robot(m):
+        rot_vr = np.array([[m[r][c] for c in range(3)] for r in range(3)], dtype=np.float32)
+        pos_vr = np.array([m[0][3], m[1][3], m[2][3]], dtype=np.float32)
+
+        pos_robot = VR_TO_ROBOT_BASIS @ pos_vr
+        rot_robot = VR_TO_ROBOT_BASIS @ rot_vr @ VR_TO_ROBOT_BASIS.T
+        roll, pitch, yaw = Controller._matrix_to_rpy(rot_robot)
+        return pos_robot, (roll, pitch, yaw)
 
     def get_action(self):
         """
@@ -59,17 +89,7 @@ class Controller:
 
                 # 提取矩阵姿态
                 m = pose.mDeviceToAbsoluteTracking
-                # xyz 位置（原始顺序）
-                x_ori, y_ori, z_ori = m[0][3], m[1][3], m[2][3]
-                
-                # 计算 RPY (Roll Pitch Yaw) 从旋转矩阵
-                pitch = np.arcsin(max(-1.0, min(1.0, m[2][0])))
-                if np.abs(m[2][0]) < 0.999999: # 没遇到万向锁
-                    roll = np.arctan2(-m[2][1], m[2][2])
-                    yaw = np.arctan2(-m[1][0], m[0][0])
-                else: 
-                    roll = 0.0
-                    yaw = np.arctan2(m[0][1], m[1][1])
+                pos_robot, (roll_robot, pitch_robot, yaw_robot) = self._vr_pose_to_robot(m)
                 
                 # 读取扳机/抓手的值 (Axis 1 is typically trigger)
                 trigger = controller_state.rAxis[1].x 
@@ -79,12 +99,13 @@ class Controller:
                 # right: [pitch, yaw, roll, y, z, x, trigger] (7-13)
                 if role == openvr.TrackedControllerRole_LeftHand:
                     # 0:pitch, 1:yaw, 2:roll, 3:y, 4:z, 5:x, 6:trigger
-                    action[0] = pitch
-                    action[1] = yaw
-                    action[2] = roll
-                    action[3] = y_ori
-                    action[4] = z_ori
-                    action[5] = x_ori
+                    # Preserve the historical wire format expected by remote_pub.py.
+                    action[0] = -pitch_robot
+                    action[1] = yaw_robot
+                    action[2] = -roll_robot
+                    action[3] = -pos_robot[1]
+                    action[4] = pos_robot[2]
+                    action[5] = -pos_robot[0]
                     action[6] = trigger
                     
                     # 按键映射：16:X(Left), 17:Y(Left)
@@ -101,12 +122,12 @@ class Controller:
 
                 elif role == openvr.TrackedControllerRole_RightHand:
                     # 7:pitch, 8:yaw, 9:roll, 10:y, 11:z, 12:x, 13:trigger
-                    action[7] = pitch
-                    action[8] = yaw
-                    action[9] = roll
-                    action[10] = y_ori
-                    action[11] = z_ori
-                    action[12] = x_ori
+                    action[7] = -pitch_robot
+                    action[8] = yaw_robot
+                    action[9] = -roll_robot
+                    action[10] = -pos_robot[1]
+                    action[11] = pos_robot[2]
+                    action[12] = -pos_robot[0]
                     action[13] = trigger
                     
                     # 按键映射：14:A(Right), 15:B(Right)
