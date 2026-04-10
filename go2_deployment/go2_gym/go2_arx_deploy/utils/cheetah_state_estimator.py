@@ -179,6 +179,7 @@ class StateEstimator:
 
         self.imu_subscription = self.lc.subscribe("leg_state_estimator_data", self._imu_cb)
         self.legdata_state_subscription = self.lc.subscribe("leg_control_data", self._legdata_cb)
+        self.armdata_state_subscription = self.lc.subscribe("piper_arm_feedback", self._armdata_cb)
         self.rc_command_subscription = self.lc.subscribe("rc_command", self._rc_command_cb)
 
         self.body_loc = np.array([0, 0, 0])
@@ -290,9 +291,19 @@ class StateEstimator:
         msg = leg_control_data_lcmt.decode(data)
         self.joint_pos[:12] = np.array(msg.q)[:12]
         self.joint_vel[:12] = np.array(msg.qd)[:12]
+        if not self.received_first_armdata:
+            self.joint_pos[12:] = np.array(msg.q_arm)[:6]
+            self.joint_vel[12:] = 0.
+        self.tau_est = np.array(msg.tau_est)
+
+    def _armdata_cb(self, channel, data):
+        if not self.received_first_armdata:
+            self.received_first_armdata = True
+            print(f"First armdata: {time.time() - self.init_time}")
+
+        msg = leg_control_data_lcmt.decode(data)
         self.joint_pos[12:] = np.array(msg.q_arm)[:6]
         self.joint_vel[12:] = 0.
-        self.tau_est = np.array(msg.tau_est)
 
 
     def _imu_cb(self, channel, data):
@@ -357,6 +368,7 @@ class StateEstimator:
 
     def close(self):
         self.lc.unsubscribe(self.legdata_state_subscription)
+        self.lc.unsubscribe(self.armdata_state_subscription)
 
 
 class StateEstimator_VR(StateEstimator):
