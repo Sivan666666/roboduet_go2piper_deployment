@@ -23,12 +23,8 @@
 #include "leg_control_data_lcmt.hpp"
 #include "pd_tau_targets_lcmt.hpp"
 #include "rc_command_lcmt.hpp"
-#include "gripper_lcmt.hpp"
 
 #include "utility.h"
-#include "Hardware/can.h"
-#include "Hardware/motor.h"
-#include "App/arm_control.h"
 #include <termios.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -123,20 +119,17 @@ public:
     int queryServiceStatus(const std::string& serviceName);
     void SetNominalPose();
     void LowCmdWrite();
-    void ARXLowCmdWrite();
 
 
     void lcm_send();
     void lcm_receive();
     void handleActionLCM(const lcm::ReceiveBuffer *rbuf, const std::string & chan, const pd_tau_targets_lcmt * msg);
-    void handleGripperLCM(const lcm::ReceiveBuffer *rbuf, const std::string & chan, const gripper_lcmt * msg);
 
     /*LowCmd write thread*/
     // DDS related low-level command sending thread pointer
     unitree::common::ThreadPtr LcmSendThreadPtr;
     unitree::common::ThreadPtr LcmRecevThreadPtr;
     unitree::common::ThreadPtr lowCmdWriteThreadPtr;
-    unitree::common::ThreadPtr ARXLowCmdWriteThreadPtr;
 
     unitree_go::msg::dds_::LowState_ low_state{};
     unitree_go::msg::dds_::LowCmd_ low_cmd{};     
@@ -159,11 +152,6 @@ public:
     leg_control_data_lcmt joint_state = {0};
     pd_tau_targets_lcmt joint_command = {0};
     rc_command_lcmt rc_command = {0};
-    gripper_lcmt gripper_command = {4.5};
-    
-    arx_arm ARX_ARM;
-    can CAN_Handlej;
-    bool stop_flag;
 };
 
 void Custom::LowStateMessageHandler(const void* message)
@@ -249,8 +237,8 @@ void Custom::InitLowCmd()
 }
 
 void Custom::SetNominalPose(){
-    // After running this cpp file, not only initializes communication
-    // But also initializes joint angles when robot is lying down
+    // After running this cpp file, initialize the leg controller
+    // and move the robot to a nominal pose.
     // Set all motors to position mode
     for(int i = 0; i < 12; i++){
         joint_command.qd_des[i] = 0;
@@ -274,56 +262,6 @@ void Custom::SetNominalPose(){
 
     std::cout<<"SET NOMINAL POSE"<<std::endl;
 
-    // init arm
-    CAN_Handlej.Send_moto_Cmd1(1, 0, 12, 0, 0, 0);
-    CAN_Handlej.Send_moto_Cmd1(2, 0, 12, 0, 0, 0);usleep(200);
-    CAN_Handlej.Send_moto_Cmd1(4, 0, 12, 0, 0, 0);usleep(200);
-    CAN_Handlej.Send_moto_Cmd2(5, 0, 1, 0, 0, 0);usleep(200);
-    CAN_Handlej.Send_moto_Cmd2(6, 0, 1, 0, 0, 0);usleep(200);
-    CAN_Handlej.Send_moto_Cmd2(7, 0, 1, 0, 0, 0);usleep(200);
-    CAN_Handlej.Send_moto_Cmd2(8, 0, 1, 0, 0, 0);usleep(200);
-    ARX_ARM.get_joint();
-    ARX_ARM.target_pos_temp[0] = ARX_ARM.current_pos[0];
-    ARX_ARM.target_pos_temp[1]=ARX_ARM.current_pos[1];
-    ARX_ARM.target_pos_temp[2]=ARX_ARM.current_pos[2];
-    ARX_ARM.target_pos_temp[3]=ARX_ARM.current_pos[3];
-    ARX_ARM.target_pos_temp[4]=ARX_ARM.current_pos[4];
-    ARX_ARM.target_pos_temp[5]=ARX_ARM.current_pos[5];
-    ARX_ARM.target_pos_temp[6]=ARX_ARM.current_pos[6];
-
-    joint_command.q_arm_des[0] = 0;
-    joint_command.q_arm_des[1] = 0;
-    joint_command.q_arm_des[2] = 0;
-    joint_command.q_arm_des[3] = 0;
-    joint_command.q_arm_des[4] = 0;
-    joint_command.q_arm_des[5] = 0;
-    joint_command.q_arm_des[6] = 0;
-    
-    for(int j = 0; j<6; j++){
-        ARX_ARM.target_pos[j]=joint_command.q_arm_des[j];
-    }
-    ARX_ARM.target_pos[6] = 4.5;
-    
-    for(int i=0;i < 1000;i++)
-    {
-        ARX_ARM.get_joint();
-        ARX_ARM.update_real();
-		usleep(4200);
-    }
-
-
-    ARX_ARM.get_joint();
-    
-    joint_command.q_arm_des[0]=ARX_ARM.current_pos[0];
-    joint_command.q_arm_des[1]=ARX_ARM.current_pos[1];
-    joint_command.q_arm_des[2]=ARX_ARM.current_pos[2];
-    joint_command.q_arm_des[3]=ARX_ARM.current_pos[3];
-    joint_command.q_arm_des[4]=ARX_ARM.current_pos[4];
-    joint_command.q_arm_des[5]=ARX_ARM.current_pos[5];
-    joint_command.q_arm_des[6]=ARX_ARM.current_pos[6];
-
-    printf("SET ARM NOMINAL POSE");
-
 }
 
 void Custom::lcm_receive(){
@@ -335,13 +273,11 @@ void Custom::lcm_receive(){
 
 void Custom::Init(){
     _firstRun = true;
-    stop_flag = false;
 
     InitLowCmd();
     SetNominalPose();
 
     lc.subscribe("pd_plustau_targets", &Custom::handleActionLCM, this);
-    lc.subscribe("gripper_command", &Custom::handleGripperLCM, this);
 
     /*create low_cmd publisher*/
     lowcmd_publisher.reset(new unitree::robot::ChannelPublisher<unitree_go::msg::dds_::LowCmd_>(TOPIC_LOWCMD));
@@ -369,14 +305,6 @@ void Custom::handleActionLCM(const lcm::ReceiveBuffer *rbuf, const std::string &
     (void) chan;
 
     joint_command = *msg;
-}
-
-void Custom::handleGripperLCM(const lcm::ReceiveBuffer *rbuf, const std::string & chan, const gripper_lcmt * msg){
-    (void) rbuf;
-    (void) chan;
-
-    gripper_command = *msg;
-    // std::cout<< joint_command.q_des[0] << std::endl;
 }
 
 
@@ -431,12 +359,6 @@ void Custom::lcm_send(){
         body_state_simple.contact_estimate[i] = low_state.foot_force()[i];
     }
 
-    // arm current joint pose
-    ARX_ARM.get_joint();
-    for (int i = 0; i < 6; i++){
-        joint_state.q_arm[i] = ARX_ARM.current_pos[i];
-    }
-
     lc.publish("leg_state_estimator_data", &body_state_simple);
     lc.publish("leg_control_data", &joint_state);
     lc.publish("rc_command", &rc_command);
@@ -457,61 +379,6 @@ void Custom::Loop(){
     LcmRecevThreadPtr = unitree::common::CreateRecurrentThreadEx("lcm_recev_thread", UT_CPU_ID_NONE, dt*1e6, &Custom::lcm_receive, this);
     /*low command write thread*/
     lowCmdWriteThreadPtr = unitree::common::CreateRecurrentThreadEx("dds_write_thread", UT_CPU_ID_NONE, dt*1e6, &Custom::LowCmdWrite, this);
-    /*ARX low command write thread*/
-    ARXLowCmdWriteThreadPtr = unitree::common::CreateRecurrentThreadEx("arx_lowcmd_write_thread", UT_CPU_ID_NONE, dt*1e6, &Custom::ARXLowCmdWrite, this);
-}
-
-void Custom::ARXLowCmdWrite(){
-
-    stop_flag = false;
-    if (!stop_flag){
-        for(int i = 0; i < 6; i++){
-            ARX_ARM.target_pos[i] =  joint_command.q_arm_des[i];
-        }
-        // ARX_ARM.update_real();
-        ARX_ARM.target_pos[6] = std::min(4.5, std::max(0.0, double(gripper_command.gripper_cmd)));
-
-
-        ARX_ARM.limit_joint(ARX_ARM.target_pos);
-
-        ARX_ARM.target_pos_temp[0] = ARX_ARM.ramp(ARX_ARM.target_pos[0], ARX_ARM.target_pos_temp[0], 0.008);
-        ARX_ARM.target_pos_temp[1] = ARX_ARM.ramp(ARX_ARM.target_pos[1], ARX_ARM.target_pos_temp[1], 0.008);
-        ARX_ARM.target_pos_temp[2] = ARX_ARM.ramp(ARX_ARM.target_pos[2], ARX_ARM.target_pos_temp[2], 0.008);
-        ARX_ARM.target_pos_temp[3] = ARX_ARM.ramp(ARX_ARM.target_pos[3], ARX_ARM.target_pos_temp[3], 0.008);
-        ARX_ARM.target_pos_temp[4] = ARX_ARM.ramp(ARX_ARM.target_pos[4], ARX_ARM.target_pos_temp[4], 0.008);
-        ARX_ARM.target_pos_temp[5] = ARX_ARM.ramp(ARX_ARM.target_pos[5], ARX_ARM.target_pos_temp[5], 0.008);
-        ARX_ARM.target_pos_temp[6] = ARX_ARM.ramp(ARX_ARM.target_pos[6], ARX_ARM.target_pos_temp[6], 0.05);
-
-        CAN_Handlej.Send_moto_Cmd1(1, 90, 28, ARX_ARM.target_pos_temp[0], 0, 0);usleep(200);
-        CAN_Handlej.Send_moto_Cmd1(2, 90, 30, ARX_ARM.target_pos_temp[1], 0, 0);usleep(200);
-        CAN_Handlej.Send_moto_Cmd1(4, 90, 30, ARX_ARM.target_pos_temp[2], 0, 0);usleep(200);
-        CAN_Handlej.Send_moto_Cmd2(5, 30, 1.2, ARX_ARM.target_pos_temp[3], 0, 0);usleep(200);
-        CAN_Handlej.Send_moto_Cmd2(6, 25, 1, ARX_ARM.target_pos_temp[4], 0, 0);usleep(200);
-        CAN_Handlej.Send_moto_Cmd2(7, 20, 1,   ARX_ARM.target_pos_temp[5], 0, 0);usleep(200);
-        CAN_Handlej.Send_moto_Cmd2(8, 5, 1,   ARX_ARM.target_pos_temp[6], 0, 0);usleep(200);
-
-    }
-    else if (stop_flag) {
-        
-        ARX_ARM.target_pos_temp[0] = ARX_ARM.ramp(ARX_ARM.target_pos[0], ARX_ARM.target_pos_temp[0],0.001);
-        ARX_ARM.target_pos_temp[1] = ARX_ARM.ramp(ARX_ARM.target_pos[1], ARX_ARM.target_pos_temp[1],0.001);
-        ARX_ARM.target_pos_temp[2] = ARX_ARM.ramp(ARX_ARM.target_pos[2], ARX_ARM.target_pos_temp[2],0.001);
-        ARX_ARM.target_pos_temp[3] = ARX_ARM.ramp(ARX_ARM.target_pos[3], ARX_ARM.target_pos_temp[3],0.001);
-        ARX_ARM.target_pos_temp[4] = ARX_ARM.ramp(ARX_ARM.target_pos[4], ARX_ARM.target_pos_temp[4],0.001);
-        ARX_ARM.target_pos_temp[5] = ARX_ARM.ramp(ARX_ARM.target_pos[5], ARX_ARM.target_pos_temp[5],0.001);
-        ARX_ARM.target_pos_temp[6] = ARX_ARM.ramp(ARX_ARM.target_pos[6], ARX_ARM.target_pos_temp[6],0.001);
-
-        CAN_Handlej.Send_moto_Cmd1(1, 150, 12, ARX_ARM.target_pos_temp[0], 0, 0);usleep(200);
-        CAN_Handlej.Send_moto_Cmd1(2, 150, 12, ARX_ARM.target_pos_temp[1], 0, 0);usleep(200);
-        CAN_Handlej.Send_moto_Cmd1(4, 150, 12, ARX_ARM.target_pos_temp[2], 0, 0);usleep(200);
-        CAN_Handlej.Send_moto_Cmd2(5, 30, 0.8, ARX_ARM.target_pos_temp[3], 0, 0);usleep(200);
-        CAN_Handlej.Send_moto_Cmd2(6, 25, 0.8, ARX_ARM.target_pos_temp[4], 0, 0);usleep(200);
-        CAN_Handlej.Send_moto_Cmd2(7, 10, 1,   ARX_ARM.target_pos_temp[5], 0, 0);usleep(200);
-        CAN_Handlej.Send_moto_Cmd2(8, 10, 1,   ARX_ARM.target_pos_temp[6], 0, 0);usleep(200);
-    }
-
-    usleep(4200);
-
 }
 
 
@@ -543,7 +410,6 @@ void Custom::LowCmdWrite(){
         std::cout << "======= Switched to Damping Mode, and the thread is sleeping ========"<<std::endl;
         sleep(1.5);
 
-        // TODO: Need to add protection for the robotic arm
         while (true)
         {   
             if (((int)key.components.B==1 && (int)key.components.L2==1) ) {
