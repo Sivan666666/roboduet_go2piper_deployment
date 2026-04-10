@@ -1,4 +1,0 @@
-struct gripper_lcmt
-{
-    float gripper_cmd;
-}
