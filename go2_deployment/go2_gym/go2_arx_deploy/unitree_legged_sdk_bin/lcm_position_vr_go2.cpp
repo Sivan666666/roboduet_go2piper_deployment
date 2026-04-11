@@ -201,7 +201,8 @@ int Custom::queryServiceStatus(const std::string& serviceName)
 
 void Custom::activateService(const std::string& serviceName,int activate)
 {
-    rsc.ServiceSwitch(serviceName, activate);  
+    int32_t status; // 新增一个变量用于接收返回状态
+    rsc.ServiceSwitch(serviceName, activate, status);
 }
 
 
@@ -429,7 +430,8 @@ void Custom::LowCmdWrite(){
                 std::cout << "======= [L2+B] is pressed again, the script is about to exit========" <<std::endl;
                 exit(0);
             } else if (((int)key.components.A==1 && (int)key.components.L2==1) ){
-                rsc.ServiceSwitch("sport_mode", 1);
+                int32_t status; // 新增一个变量用于接收返回状态
+                rsc.ServiceSwitch("sport_mode", 1, status);
                 std::cout << "======= activate sport_mode service and exit========" <<std::endl;
                 sleep(0.5);
                 exit(0);
