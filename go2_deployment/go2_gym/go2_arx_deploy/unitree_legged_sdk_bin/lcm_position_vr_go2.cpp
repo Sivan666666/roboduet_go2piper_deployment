@@ -29,6 +29,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <atomic>
+#include <array>
 #include <cmath>
 #include <iostream>
 #include <algorithm>
@@ -41,6 +42,15 @@ using namespace std;
 
 constexpr double PosStopF = (2.146E+9f);
 constexpr double VelStopF = (16000.0f);
+constexpr int kLegMotorCount = 12;
+constexpr int kStartupTransitionSteps = 1000;  // 2s at 500 Hz
+
+const std::array<double, kLegMotorCount> kStartupJointTarget = {
+    -0.1, 0.8, -1.5,   // FR
+     0.1, 0.8, -1.5,   // FL
+    -0.1, 1.0, -1.5,   // RR
+     0.1, 1.0, -1.5    // RL
+};
 
 // No need to change: Motor calibration function provided by Unitree
 uint32_t crc32_core(uint32_t* ptr, uint32_t len)
@@ -147,7 +157,10 @@ public:
     int motiontime = 0;
     float dt = 0.002; // unit [second]
     bool _firstRun;
+    bool startup_pose_initialized = false;
+    int startup_transition_count = 0;
     bool print_motor_position = false;
+    std::array<double, kLegMotorCount> startup_joint_pos{};
 
     state_estimator_lcmt body_state_simple = {0};
     leg_control_data_lcmt joint_state = {0};
@@ -201,8 +214,7 @@ int Custom::queryServiceStatus(const std::string& serviceName)
 
 void Custom::activateService(const std::string& serviceName,int activate)
 {
-    int32_t status; // 新增一个变量用于接收返回状态
-    rsc.ServiceSwitch(serviceName, activate, status);
+    rsc.ServiceSwitch(serviceName, activate);  
 }
 
 
@@ -241,27 +253,15 @@ void Custom::SetNominalPose(){
     // After running this cpp file, initialize the leg controller
     // and move the robot to a nominal pose.
     // Set all motors to position mode
-    for(int i = 0; i < 12; i++){
+    for(int i = 0; i < kLegMotorCount; i++){
         joint_command.qd_des[i] = 0;
         joint_command.tau_ff[i] = 0;
         joint_command.kp[i] = 50.;
         joint_command.kd[i] = 1.;
+        joint_command.q_des[i] = 0.;
     }
 
-    joint_command.q_des[0] = -0.3;
-    joint_command.q_des[1] = 1.2;
-    joint_command.q_des[2] = -2.721;
-    joint_command.q_des[3] = 0.3;
-    joint_command.q_des[4] = 1.2;
-    joint_command.q_des[5] = -2.721;
-    joint_command.q_des[6] = -0.3;
-    joint_command.q_des[7] = 1.2;
-    joint_command.q_des[8] = -2.721;
-    joint_command.q_des[9] = 0.3;
-    joint_command.q_des[10] = 1.2;
-    joint_command.q_des[11] = -2.721;
-
-    std::cout<<"SET NOMINAL POSE"<<std::endl;
+    std::cout<<"SET STARTUP LEG POSE TARGET"<<std::endl;
 
 }
 
@@ -304,6 +304,10 @@ double jointLinearInterpolation(double initPos, double targetPos, double rate)
 void Custom::handleActionLCM(const lcm::ReceiveBuffer *rbuf, const std::string & chan, const pd_tau_targets_lcmt * msg){
     (void) rbuf;
     (void) chan;
+
+    if (_firstRun){
+        return;
+    }
 
     joint_command = *msg;
 }
@@ -399,16 +403,43 @@ void Custom::Loop(){
 void Custom::LowCmdWrite(){
     motiontime++;
 
-    if(_firstRun && joint_state.q[0] != 0){
-        for(int i = 0; i < 12; i++){
-            joint_command.q_des[i] = joint_state.q[i];
+    if(_firstRun){
+        if (joint_state.q[0] != 0){
+            if (!startup_pose_initialized){
+                for(int i = 0; i < kLegMotorCount; i++){
+                    startup_joint_pos[i] = joint_state.q[i];
+                }
+                startup_pose_initialized = true;
+                startup_transition_count = 0;
+                std::cout << "Captured initial leg pose, moving to startup target pose." << std::endl;
+            }
+
+            const double rate = std::min(1.0, static_cast<double>(startup_transition_count) / kStartupTransitionSteps);
+            for(int i = 0; i < kLegMotorCount; i++){
+                joint_command.q_des[i] = jointLinearInterpolation(startup_joint_pos[i], kStartupJointTarget[i], rate);
+            }
+
+            if (startup_transition_count < kStartupTransitionSteps){
+                startup_transition_count++;
+            } else {
+                _firstRun = false;
+                std::cout << "Startup leg pose reached, accepting LCM leg commands." << std::endl;
+            }
+
             // Initialize L2+B to prevent accidental damping activation
             key.components.Y = 0;
             key.components.A = 0;
             key.components.B = 0;
             key.components.L2 = 0;
+        } else {
+            for (int i = 0; i < kLegMotorCount; i++){
+                low_cmd.motor_cmd()[i].q() = PosStopF;
+                low_cmd.motor_cmd()[i].dq() = VelStopF;
+                low_cmd.motor_cmd()[i].kp() = 0;
+                low_cmd.motor_cmd()[i].kd() = 2;
+                low_cmd.motor_cmd()[i].tau() = 0;
+            }
         }
-        _firstRun = false;
     }
 
     if ( std::abs(low_state.imu_state().rpy()[0]) > 1.0 || std::abs(low_state.imu_state().rpy()[1]) > 1.0 || ((int)key.components.B==1 && (int)key.components.L2==1))
@@ -430,8 +461,7 @@ void Custom::LowCmdWrite(){
                 std::cout << "======= [L2+B] is pressed again, the script is about to exit========" <<std::endl;
                 exit(0);
             } else if (((int)key.components.A==1 && (int)key.components.L2==1) ){
-                int32_t status; // 新增一个变量用于接收返回状态
-                rsc.ServiceSwitch("sport_mode", 1, status);
+                rsc.ServiceSwitch("sport_mode", 1);
                 std::cout << "======= activate sport_mode service and exit========" <<std::endl;
                 sleep(0.5);
                 exit(0);
