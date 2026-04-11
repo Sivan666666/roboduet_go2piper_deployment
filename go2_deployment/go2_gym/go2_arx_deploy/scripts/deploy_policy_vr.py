@@ -2,6 +2,7 @@ import pickle as pkl
 import lcm
 import sys
 import os.path as osp
+import torch
 
 from go2_arx_deploy.utils.deployment_runner import DeploymentRunner
 from go2_arx_deploy.envs.lcm_agent import LCMAgent
@@ -17,6 +18,27 @@ ckpt_path = "runs/test_roboduet_go2/2024-10-21/auto_train/234306.994556_seed8765
 ckpt_id = "040000"
 
 device = "cuda"
+PIPER_DEFAULT_JOINT_ANGLES = {
+    "piper_joint1": 0.0,
+    "piper_joint2": 0.6,
+    "piper_joint3": -0.5,
+    "piper_joint4": 0.0,
+    "piper_joint5": 0.0,
+    "piper_joint6": 0.0,
+    "piper_joint7": 0.0,
+    "piper_joint8": 0.0,
+}
+
+
+def apply_piper_deploy_overrides(cfg):
+    default_joint_angles = cfg["init_state"]["default_joint_angles"]
+    default_joint_angles.update(PIPER_DEFAULT_JOINT_ANGLES)
+
+    # Keep legacy aliases populated so older checkpoints/config consumers still work.
+    for idx in range(6):
+        default_joint_angles[f"zarx_j{idx + 1}"] = PIPER_DEFAULT_JOINT_ANGLES[f"piper_joint{idx + 1}"]
+
+    return cfg
 
 def load_dog_policy(Cfg):
     actor_critic = DogActorCritic(
@@ -98,6 +120,8 @@ def load_and_run_policy(experiment_name, max_vel=1.0, max_yaw_vel=1.0):
                 else:
                     for key2, value2 in cfg[key].items():
                         setattr(getattr(cfg, key), key2, value2)
+
+    cfg = apply_piper_deploy_overrides(cfg)
 
     se = StateEstimator_VR(lc)
     cfg["domain_rand"]["push_robots"] = False
