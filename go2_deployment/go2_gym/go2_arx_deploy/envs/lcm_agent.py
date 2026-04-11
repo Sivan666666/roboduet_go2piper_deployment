@@ -19,6 +19,15 @@ ARM_JOINT_NAME_CANDIDATES = [
     ("piper_joint5", "zarx_j5"),
     ("piper_joint6", "zarx_j6"),
 ]
+PIPER_ARM_LIMITS = [
+    (-2.618, 2.168),
+    (0.0, 3.14),
+    (-2.967, 0.0),
+    (-1.745, 1.745),
+    (-1.22, 1.22),
+    (-2.0944, 2.0944),
+]
+PIPER_GRIPPER_INPUT_LIMITS = (0.0, 4.5)
 
 
 def class_to_dict(obj) -> dict:
@@ -261,12 +270,9 @@ class LCMAgent():
         joint_pos_target[:6] = self.joint_pos_target
 
         
-        joint_pos_target[0] = min(max(joint_pos_target[0], -2.3299999237060547), 2.853600025177002 )  # soft dof limit
-        joint_pos_target[1] = min(max(joint_pos_target[1], 0.1832599937915802 ), 3.4818999767303467)  # soft dof limit
-        joint_pos_target[2] = min(max(joint_pos_target[2], 0.15707999467849731), 2.984499931335449 )  # soft dof limit
-        joint_pos_target[3] = min(max(joint_pos_target[3], -1.413699984550476 ), 1.413699984550476 )  # soft dof limit
-        joint_pos_target[4] = min(max(joint_pos_target[4], -1.413699984550476 ), 1.413699984550476 )  # soft dof limit
-        joint_pos_target[5] = min(max(joint_pos_target[5], -1.413699984550476 ), 1.413699984550476 )  # soft dof limit
+        for joint_idx, (lower, upper) in enumerate(PIPER_ARM_LIMITS):
+            joint_pos_target[joint_idx] = float(np.clip(joint_pos_target[joint_idx], lower, upper))
+        joint_pos_target[6] = float(np.clip(joint_pos_target[6], *PIPER_GRIPPER_INPUT_LIMITS))
 
         filter_rate = 0.1
         if self.last_arm_real_target is None:
