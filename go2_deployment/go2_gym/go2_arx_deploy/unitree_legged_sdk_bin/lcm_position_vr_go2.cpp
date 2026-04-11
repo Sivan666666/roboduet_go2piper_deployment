@@ -147,6 +147,7 @@ public:
     int motiontime = 0;
     float dt = 0.002; // unit [second]
     bool _firstRun;
+    bool print_motor_position = false;
 
     state_estimator_lcmt body_state_simple = {0};
     leg_control_data_lcmt joint_state = {0};
@@ -309,6 +310,7 @@ void Custom::handleActionLCM(const lcm::ReceiveBuffer *rbuf, const std::string &
 
 
 void Custom::lcm_send(){
+    static int motor_print_count = 0;
 
     rc_command.left_stick[0] = joystick.lx();
     rc_command.left_stick[1] = joystick.ly();
@@ -356,6 +358,18 @@ void Custom::lcm_send(){
     }
     for(int i = 0; i < 4; i++){
         body_state_simple.contact_estimate[i] = low_state.foot_force()[i];
+    }
+
+    if (print_motor_position && (motor_print_count++ % 50) == 0){
+        std::cout
+            << "front legs q | "
+            << "FR_hip=" << joint_state.q[0] << ", "
+            << "FR_thigh=" << joint_state.q[1] << ", "
+            << "FR_calf=" << joint_state.q[2] << " | "
+            << "FL_hip=" << joint_state.q[3] << ", "
+            << "FL_thigh=" << joint_state.q[4] << ", "
+            << "FL_calf=" << joint_state.q[5]
+            << std::endl;
     }
 
     lc.publish("leg_state_estimator_data", &body_state_simple);
@@ -463,8 +477,24 @@ int main(int argc, char **argv)
 {
     if (argc < 2)
     {
-        std::cout << "Usage: " << argv[0] << " networkInterface" << std::endl;
+        std::cout << "Usage: " << argv[0] << " networkInterface [--printmotor]" << std::endl;
         exit(-1);
+    }
+
+    bool print_motor_position = false;
+    for (int i = 2; i < argc; i++)
+    {
+        std::string arg = argv[i];
+        if (arg == "--printmotor")
+        {
+            print_motor_position = true;
+        }
+        else
+        {
+            std::cout << "Unknown argument: " << arg << std::endl;
+            std::cout << "Usage: " << argv[0] << " networkInterface [--printmotor]" << std::endl;
+            exit(-1);
+        }
     }
 
     std::cout << "Communication level is set to LOW-level." << std::endl
@@ -478,6 +508,7 @@ int main(int argc, char **argv)
 
 
     Custom custom;
+    custom.print_motor_position = print_motor_position;
 
     custom.InitRobotStateClient();
     if(custom.queryServiceStatus("sport_mode"))

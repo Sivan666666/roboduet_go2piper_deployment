@@ -32,6 +32,8 @@ RAD_TO_PIPER_UNITS = 180000.0 / math.pi
 PIPER_UNITS_TO_RAD = math.pi / 180000.0
 M_TO_PIPER_GRIPPER_UNITS = 1_000_000.0
 PIPER_GRIPPER_UNITS_TO_M = 1.0 / M_TO_PIPER_GRIPPER_UNITS
+DEFAULT_START_JOINTS = np.array([0.0, 0.6, -0.5, 0.0, 0.0, 0.0], dtype=np.float64)
+DEFAULT_START_GRIPPER_INPUT = 0.0
 
 
 class PiperBridge:
@@ -43,7 +45,7 @@ class PiperBridge:
         self.command_msg = pd_tau_targets_lcmt()
         self.have_arm_command = False
 
-        self.command_joint_targets = np.zeros(6, dtype=np.float64)
+        self.command_joint_targets = DEFAULT_START_JOINTS.copy()
         self.command_gripper_m = 0.0
         self.have_gripper_command = False
 
@@ -54,6 +56,7 @@ class PiperBridge:
         self.feedback_msg = leg_control_data_lcmt()
         self.feedback_channel = args.feedback_channel
         self.last_debug_log_time = 0.0
+        self.startup_pose_reached = False
 
         self.lc.subscribe("pd_plustau_targets", self._handle_arm_command)
         self.lc.subscribe("gripper_command", self._handle_gripper_command)
@@ -118,6 +121,7 @@ class PiperBridge:
         time.sleep(0.05)
         self.piper.GripperCtrl(0, self.args.gripper_effort, 0x01, 0)
         self.piper.ModeCtrl(0x01, 0x01, self.args.move_speed_rate, 0x00)
+        self._move_to_start_pose()
 
     def disconnect(self):
         if hasattr(self.piper, "DisconnectPort"):
@@ -139,10 +143,14 @@ class PiperBridge:
             self.received_joint_feedback = True
             LOGGER.info("Received first Piper joint feedback: %s", np.round(self.latest_joint_feedback, 3))
 
-        if not self.have_arm_command:
+        if not self.startup_pose_reached:
+            self.command_joint_targets = self.args.start_joints.copy()
+        elif not self.have_arm_command:
             # Hold the current pose until the first LCM command arrives.
             self.command_joint_targets = self.latest_joint_feedback.copy()
-        if not self.have_gripper_command:
+        if not self.startup_pose_reached:
+            self.command_gripper_m = self._input_gripper_to_meters(self.args.start_gripper_input)
+        elif not self.have_gripper_command:
             self.command_gripper_m = self.latest_gripper_feedback_m
 
     def _send_commands(self):
@@ -160,6 +168,36 @@ class PiperBridge:
         feedback.q_arm[:6] = self.latest_joint_feedback.astype(np.float32)
         feedback.q_arm[6] = float(self._meters_to_input_gripper(self.latest_gripper_feedback_m))
         self.lc.publish(self.feedback_channel, feedback.encode())
+
+    def _move_to_start_pose(self):
+        LOGGER.info("Moving Piper to startup pose: %s", np.round(self.args.start_joints, 3))
+
+        self.command_joint_targets = self.args.start_joints.copy()
+        self.command_gripper_m = self._input_gripper_to_meters(self.args.start_gripper_input)
+
+        deadline = time.monotonic() + self.args.startup_timeout
+        while not self.shutdown and time.monotonic() < deadline:
+            self._refresh_feedback()
+            self._send_commands()
+            self._publish_feedback()
+
+            joint_error = np.max(np.abs(self.latest_joint_feedback - self.args.start_joints))
+            gripper_error = abs(
+                self.latest_gripper_feedback_m - self._input_gripper_to_meters(self.args.start_gripper_input)
+            )
+            if joint_error <= self.args.startup_joint_tolerance and gripper_error <= self.args.startup_gripper_tolerance:
+                self.startup_pose_reached = True
+                LOGGER.info(
+                    "Startup pose reached: joint_error=%.4f rad, gripper_error=%.4f m",
+                    joint_error,
+                    gripper_error,
+                )
+                return
+
+            time.sleep(1.0 / self.args.control_rate_hz)
+
+        self.startup_pose_reached = True
+        LOGGER.warning("Startup pose wait timed out; continuing to command loop")
 
     def _maybe_log_debug(self):
         if self.args.log_interval <= 0:
@@ -258,11 +296,36 @@ def build_argparser():
         help="Seconds to wait for EnablePiper()",
     )
     parser.add_argument(
+        "--startup-timeout",
+        type=float,
+        default=8.0,
+        help="Seconds to wait while moving to the startup pose",
+    )
+    parser.add_argument(
+        "--startup-joint-tolerance",
+        type=float,
+        default=0.08,
+        help="Maximum absolute joint error in rad to accept the startup pose",
+    )
+    parser.add_argument(
+        "--startup-gripper-tolerance",
+        type=float,
+        default=0.01,
+        help="Maximum absolute gripper error in meters to accept the startup pose",
+    )
+    parser.add_argument(
+        "--start-gripper-input",
+        type=float,
+        default=DEFAULT_START_GRIPPER_INPUT,
+        help="Startup gripper target expressed in the current upstream gripper scale",
+    )
+    parser.add_argument(
         "--log-interval",
         type=float,
         default=0.5,
         help="Seconds between debug logs; set <= 0 to disable",
     )
+    parser.set_defaults(start_joints=DEFAULT_START_JOINTS.copy())
     return parser
 
 
