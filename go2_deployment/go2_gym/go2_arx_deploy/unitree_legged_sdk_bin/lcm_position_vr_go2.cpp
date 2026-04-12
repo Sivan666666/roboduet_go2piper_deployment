@@ -43,9 +43,19 @@ using namespace std;
 constexpr double PosStopF = (2.146E+9f);
 constexpr double VelStopF = (16000.0f);
 constexpr int kLegMotorCount = 12;
-constexpr int kStartupTransitionSteps = 1000;  // 2s at 500 Hz
+constexpr int kStartupStage1Steps = 100;       // 0.2s at 500 Hz
+constexpr int kStartupStage2Steps = 1000;      // 2.0s at 500 Hz
+constexpr double kStartupFinalTolerance = 0.2;
+constexpr int kStartupStatusPrintSteps = 250;  // 0.5s at 500 Hz
 
-const std::array<double, kLegMotorCount> kStartupJointTarget = {
+const std::array<double, kLegMotorCount> kStartupJointTargetStage1 = {
+     0.0, 1.36, -2.65,  // FR
+     0.0, 1.36, -2.65,  // FL
+    -0.2, 1.36, -2.65,  // RR
+     0.2, 1.36, -2.65   // RL
+};
+
+const std::array<double, kLegMotorCount> kStartupJointTargetStage2 = {
     -0.1, 0.8, -1.5,   // FR
      0.1, 0.8, -1.5,   // FL
     -0.1, 1.0, -1.5,   // RR
@@ -158,7 +168,9 @@ public:
     float dt = 0.002; // unit [second]
     bool _firstRun;
     bool startup_pose_initialized = false;
+    int startup_stage = 0;
     int startup_transition_count = 0;
+    int startup_status_print_count = 0;
     bool print_motor_position = false;
     std::array<double, kLegMotorCount> startup_joint_pos{};
 
@@ -257,12 +269,12 @@ void Custom::SetNominalPose(){
     for(int i = 0; i < kLegMotorCount; i++){
         joint_command.qd_des[i] = 0;
         joint_command.tau_ff[i] = 0;
-        joint_command.kp[i] = 50.;
-        joint_command.kd[i] = 1.;
+        joint_command.kp[i] = 80.;
+        joint_command.kd[i] = 1.5;
         joint_command.q_des[i] = 0.;
     }
 
-    std::cout<<"SET STARTUP LEG POSE TARGET"<<std::endl;
+    std::cout<<"SET TWO-STAGE STARTUP LEG POSE TARGET"<<std::endl;
 
 }
 
@@ -411,20 +423,56 @@ void Custom::LowCmdWrite(){
                     startup_joint_pos[i] = joint_state.q[i];
                 }
                 startup_pose_initialized = true;
+                startup_stage = 0;
                 startup_transition_count = 0;
-                std::cout << "Captured initial leg pose, moving to startup target pose." << std::endl;
+                startup_status_print_count = 0;
+                std::cout << "Captured initial leg pose, entering two-stage startup stand sequence." << std::endl;
             }
 
-            const double rate = std::min(1.0, static_cast<double>(startup_transition_count) / kStartupTransitionSteps);
-            for(int i = 0; i < kLegMotorCount; i++){
-                joint_command.q_des[i] = jointLinearInterpolation(startup_joint_pos[i], kStartupJointTarget[i], rate);
-            }
+            if (startup_stage == 0){
+                const double rate = std::min(1.0, static_cast<double>(startup_transition_count) / kStartupStage1Steps);
+                for(int i = 0; i < kLegMotorCount; i++){
+                    joint_command.q_des[i] = jointLinearInterpolation(startup_joint_pos[i], kStartupJointTargetStage1[i], rate);
+                }
 
-            if (startup_transition_count < kStartupTransitionSteps){
-                startup_transition_count++;
+                if (startup_transition_count < kStartupStage1Steps){
+                    startup_transition_count++;
+                } else {
+                    startup_stage = 1;
+                    startup_transition_count = 0;
+                    std::cout << "Startup stand stage 1 finished, moving to final startup pose." << std::endl;
+                }
+            } else if (startup_stage == 1){
+                const double rate = std::min(1.0, static_cast<double>(startup_transition_count) / kStartupStage2Steps);
+                for(int i = 0; i < kLegMotorCount; i++){
+                    joint_command.q_des[i] = jointLinearInterpolation(kStartupJointTargetStage1[i], kStartupJointTargetStage2[i], rate);
+                }
+
+                if (startup_transition_count < kStartupStage2Steps){
+                    startup_transition_count++;
+                } else {
+                    startup_stage = 2;
+                    std::cout << "Startup stand stage 2 commanded, waiting for legs to settle." << std::endl;
+                }
             } else {
-                _firstRun = false;
-                std::cout << "Startup leg pose reached, accepting LCM leg commands." << std::endl;
+                double max_joint_error = 0.0;
+                for(int i = 0; i < kLegMotorCount; i++){
+                    joint_command.q_des[i] = kStartupJointTargetStage2[i];
+                    max_joint_error = std::max(max_joint_error, std::abs(joint_state.q[i] - kStartupJointTargetStage2[i]));
+                }
+
+                if (max_joint_error <= kStartupFinalTolerance){
+                    _firstRun = false;
+                    std::cout << "Startup leg pose reached, accepting LCM leg commands. max_error="
+                              << max_joint_error << " rad" << std::endl;
+                } else if ((startup_status_print_count++ % kStartupStatusPrintSteps) == 0){
+                    std::cout << "Waiting for startup stand settle. max_error=" << max_joint_error
+                              << " rad | cmd FR=(" << joint_command.q_des[0] << ", " << joint_command.q_des[1] << ", " << joint_command.q_des[2]
+                              << ") FL=(" << joint_command.q_des[3] << ", " << joint_command.q_des[4] << ", " << joint_command.q_des[5]
+                              << ") | fb FR=(" << joint_state.q[0] << ", " << joint_state.q[1] << ", " << joint_state.q[2]
+                              << ") FL=(" << joint_state.q[3] << ", " << joint_state.q[4] << ", " << joint_state.q[5] << ")"
+                              << std::endl;
+                }
             }
 
             // Initialize L2+B to prevent accidental damping activation

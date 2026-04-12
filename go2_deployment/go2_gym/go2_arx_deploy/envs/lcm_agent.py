@@ -3,13 +3,31 @@ import time
 import lcm
 import numpy as np
 import torch
-import cv2
+# import cv2
 
 from go2_arx_deploy.lcm_types.pd_tau_targets_lcmt import pd_tau_targets_lcmt
 from go2_arx_deploy.utils.cheetah_state_estimator import quat_apply, StateEstimator
 from go2_arx_deploy.utils.command_profile import RCControllerProfile
 
 lc = lcm.LCM("udpm://239.255.76.67:7314?ttl=255")
+
+ARM_JOINT_NAME_CANDIDATES = [
+    ("piper_joint1", "zarx_j1"),
+    ("piper_joint2", "zarx_j2"),
+    ("piper_joint3", "zarx_j3"),
+    ("piper_joint4", "zarx_j4"),
+    ("piper_joint5", "zarx_j5"),
+    ("piper_joint6", "zarx_j6"),
+]
+PIPER_ARM_LIMITS = [
+    (-2.618, 2.168),
+    (0.0, 3.14),
+    (-2.967, 0.0),
+    (-1.745, 1.745),
+    (-1.22, 1.22),
+    (-2.0944, 2.0944),
+]
+PIPER_GRIPPER_INPUT_LIMITS = (0.0, 4.5)
 
 
 def class_to_dict(obj) -> dict:
@@ -63,14 +81,16 @@ class LCMAgent():
              self.obs_scales["ang_vel"], self.obs_scales["body_pitch_cmd"],
              self.obs_scales["body_roll_cmd"]])[:self.dog_num_commands]
 
-
-        joint_names = [
+        leg_joint_names = [
             'FL_hip_joint', 'FL_thigh_joint', 'FL_calf_joint',
             'FR_hip_joint', 'FR_thigh_joint', 'FR_calf_joint',
             'RL_hip_joint', 'RL_thigh_joint', 'RL_calf_joint',
             'RR_hip_joint', 'RR_thigh_joint', 'RR_calf_joint',
-            'zarx_j1','zarx_j2','zarx_j3','zarx_j4','zarx_j5','zarx_j6']
-        
+        ]
+        self.arm_joint_name_candidates = ARM_JOINT_NAME_CANDIDATES
+        arm_joint_names = [self._resolve_arm_joint_name(candidates) for candidates in self.arm_joint_name_candidates]
+        joint_names = leg_joint_names + arm_joint_names
+
         self.default_dof_pos = np.array([self.cfg["init_state"]["default_joint_angles"][name] for name in joint_names])
         try:
             self.default_dof_pos_scale = np.array([self.cfg["init_state"]["default_hip_scales"], self.cfg["init_state"]["default_thigh_scales"], self.cfg["init_state"]["default_calf_scales"],
@@ -88,13 +108,21 @@ class LCMAgent():
         for i in range(18):
             joint_name = joint_names[i]
             found = False
-            
-            for dof_name in self.cfg["control"]["stiffness"].keys():
-                if dof_name in joint_name:
-                    self.p_gains[i] = self.cfg["dog"]["control"]["stiffness_leg"][dof_name] if i < self.num_actions_loco else self.cfg["arm"]["control"]["stiffness_arm"][dof_name]
-                    self.d_gains[i] = self.cfg["dog"]["control"]["damping_leg"][dof_name] if i < self.num_actions_loco else self.cfg["arm"]["control"]["damping_arm"][dof_name]
-                    found = True
-                    
+
+            if i < self.num_actions_loco:
+                for dof_name in self.cfg["control"]["stiffness"].keys():
+                    if dof_name in joint_name:
+                        self.p_gains[i] = self.cfg["dog"]["control"]["stiffness_leg"][dof_name]
+                        self.d_gains[i] = self.cfg["dog"]["control"]["damping_leg"][dof_name]
+                        found = True
+                        break
+            else:
+                arm_joint_index = i - self.num_actions_loco
+                gain_key = self._resolve_arm_gain_key(arm_joint_index)
+                self.p_gains[i] = self.cfg["arm"]["control"]["stiffness_arm"][gain_key]
+                self.d_gains[i] = self.cfg["arm"]["control"]["damping_arm"][gain_key]
+                found = True
+
             if not found:
                 self.p_gains[i] = 0.
                 self.d_gains[i] = 0.
@@ -134,6 +162,20 @@ class LCMAgent():
         self.plan_actions = torch.zeros(2, dtype=torch.float32)
 
         self.last_arm_real_target = None
+
+    def _resolve_arm_joint_name(self, candidates):
+        default_joint_angles = self.cfg["init_state"]["default_joint_angles"]
+        for name in candidates:
+            if name in default_joint_angles:
+                return name
+        raise KeyError(f"Missing arm default joint angle for any of {candidates}")
+
+    def _resolve_arm_gain_key(self, arm_joint_index):
+        stiffness_arm = self.cfg["arm"]["control"]["stiffness_arm"]
+        for name in self.arm_joint_name_candidates[arm_joint_index]:
+            if name in stiffness_arm:
+                return name
+        raise KeyError(f"Missing arm stiffness/damping key for joint index {arm_joint_index}")
 
     def plan(self, obs):
         self.commands_dog[3] = torch.clip(obs[0] * 0.4, -0.4, 0.3)
@@ -228,13 +270,10 @@ class LCMAgent():
         joint_pos_target[:6] = self.joint_pos_target
 
         
-        joint_pos_target[0] = min(max(joint_pos_target[0], -2.3299999237060547), 2.853600025177002 )  # soft dof limit
-        joint_pos_target[1] = min(max(joint_pos_target[1], 0.1832599937915802 ), 3.4818999767303467)  # soft dof limit
-        joint_pos_target[2] = min(max(joint_pos_target[2], 0.15707999467849731), 2.984499931335449 )  # soft dof limit
-        joint_pos_target[3] = min(max(joint_pos_target[3], -1.413699984550476 ), 1.413699984550476 )  # soft dof limit
-        joint_pos_target[4] = min(max(joint_pos_target[4], -1.413699984550476 ), 1.413699984550476 )  # soft dof limit
-        joint_pos_target[5] = min(max(joint_pos_target[5], -1.413699984550476 ), 1.413699984550476 )  # soft dof limit
-
+        for joint_idx, (lower, upper) in enumerate(PIPER_ARM_LIMITS):
+            joint_pos_target[joint_idx] = float(np.clip(joint_pos_target[joint_idx], lower, upper))
+        joint_pos_target[6] = float(np.clip(joint_pos_target[6], *PIPER_GRIPPER_INPUT_LIMITS))
+        
         filter_rate = 0.1
         if self.last_arm_real_target is None:
             self.last_arm_real_target = joint_pos_target[:7]
