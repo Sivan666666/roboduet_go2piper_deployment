@@ -13,9 +13,12 @@ from go2_arx_deploy.lcm_types.camera_message_lcmt import camera_message_lcmt
 from go2_arx_deploy.lcm_types.camera_message_rect_wide import camera_message_rect_wide
 from go2_arx_deploy.lcm_types.vr_command_lcmt import vr_command_lcmt
 
-REMOTE_CMD_FILTER_RATE = 0.85
+REMOTE_CMD_POS_FILTER_RATE = 0.92
+REMOTE_CMD_ANG_FILTER_RATE = 0.94
 REMOTE_CMD_JUMP_POS_THRESH = 0.05
 REMOTE_CMD_JUMP_ANG_THRESH = 0.2
+REMOTE_CMD_MAX_POS_STEP = 0.012
+REMOTE_CMD_MAX_ANG_STEP = 0.06
 
 
 def quat_apply(a, b):
@@ -161,6 +164,12 @@ def detect_remote_command_jump(previous_pose, current_pose):
     ang_norm = float(np.linalg.norm(ang_delta))
     is_jump = (pos_norm > REMOTE_CMD_JUMP_POS_THRESH) or (ang_norm > REMOTE_CMD_JUMP_ANG_THRESH)
     return is_jump, pos_norm, ang_norm
+
+
+def rate_limit_vector(target, previous, max_step):
+    delta = np.asarray(target, dtype=np.float64) - np.asarray(previous, dtype=np.float64)
+    delta = np.clip(delta, -max_step, max_step)
+    return np.asarray(previous, dtype=np.float64) + delta
 
 class StateEstimator:
     def __init__(self, lc, use_cameras=True):
@@ -493,10 +502,18 @@ class StateEstimator_VR(StateEstimator):
         if self.filtered_remote_pose is None:
             self.filtered_remote_pose = raw_remote_pose_cmd.copy()
         else:
-            self.filtered_remote_pose = (
-                REMOTE_CMD_FILTER_RATE * self.filtered_remote_pose
-                + (1.0 - REMOTE_CMD_FILTER_RATE) * raw_remote_pose_cmd
+            filtered_xyz = (
+                REMOTE_CMD_POS_FILTER_RATE * self.filtered_remote_pose[:3]
+                + (1.0 - REMOTE_CMD_POS_FILTER_RATE) * raw_remote_pose_cmd[:3]
             )
+            filtered_abg = (
+                REMOTE_CMD_ANG_FILTER_RATE * self.filtered_remote_pose[3:6]
+                + (1.0 - REMOTE_CMD_ANG_FILTER_RATE) * raw_remote_pose_cmd[3:6]
+            )
+
+            filtered_xyz = rate_limit_vector(filtered_xyz, self.filtered_remote_pose[:3], REMOTE_CMD_MAX_POS_STEP)
+            filtered_abg = rate_limit_vector(filtered_abg, self.filtered_remote_pose[3:6], REMOTE_CMD_MAX_ANG_STEP)
+            self.filtered_remote_pose = np.concatenate((filtered_xyz, filtered_abg), axis=0)
 
 
     def get_command(self):
