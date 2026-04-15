@@ -300,9 +300,9 @@ class LCMAgent():
         self.actions = torch.clip(actions[:], -clip_actions, clip_actions)
         self.publish_action(self.actions, hard_reset=hard_reset)
         # time.sleep(max(self.dt - (time.time() - self.time), 0))
-        if self.timestep % 100 == 0: print(f'frq: {1 / (time.time() - self.time)} Hz');
-        self.time = time.time()
-        obs, _ = self.get_arm_observations()
+        # if self.timestep % 100 == 0: print(f'frq: {1 / (time.time() - self.time)} Hz');
+        # self.time = time.time()
+        # obs, _ = self.get_arm_observations()
 
         # clock accounting
         frequencies = 3.0

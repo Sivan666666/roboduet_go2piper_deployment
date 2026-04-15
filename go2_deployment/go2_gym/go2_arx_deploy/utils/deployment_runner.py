@@ -30,6 +30,7 @@ class DeploymentRunner:
 
         self.is_currently_probing = False
         self.is_currently_logging = [False, False, False, False]
+        self.profile_print_interval = 100
 
     def init_log_filename(self):
         datetime = time.strftime("%Y/%m_%d/%H_%M_%S")
@@ -134,6 +135,16 @@ class DeploymentRunner:
         assert self.dog_policy is not None and self.arm_policy is not None, "cannot deploy, runner has no policy!"
         assert self.command_profile is not None, "cannot deploy, runner has no command profile!"
 
+        profile_stats = {
+            "loop_s": 0.0,
+            "arm_policy_s": 0.0,
+            "dog_obs_s": 0.0,
+            "dog_policy_s": 0.0,
+            "step_s": 0.0,
+            "arm_obs_s": 0.0,
+        }
+        profile_count = 0
+
         for agent_name in self.agents.keys():
             obs = self.agents[agent_name].reset()
             if agent_name == self.control_agent_name:
@@ -145,14 +156,23 @@ class DeploymentRunner:
 
         try:
             for i in range(max_steps):
+                loop_start = time.perf_counter()
                 policy_info = {}
+                arm_policy_start = time.perf_counter()
                 actions_arm = self.arm_policy(control_obs)
+                profile_stats["arm_policy_s"] += time.perf_counter() - arm_policy_start
                 for agent_name in self.agents.keys():
                     agent = self.agents[agent_name]
                     agent.plan(actions_arm[..., -2:])
+                    dog_obs_start = time.perf_counter()
                     dog_obs = agent.get_dog_observations()
+                    profile_stats["dog_obs_s"] += time.perf_counter() - dog_obs_start
+                    dog_policy_start = time.perf_counter()
                     actions_dog = self.dog_policy(dog_obs)
+                    profile_stats["dog_policy_s"] += time.perf_counter() - dog_policy_start
+                    step_start = time.perf_counter()
                     rew_dog, rew_arm, done, info = agent.step(actions_dog, actions_arm[:-2])
+                    profile_stats["step_s"] += time.perf_counter() - step_start
                     info.update(policy_info)
                     info.update({"observation": obs, "reward": (rew_dog, rew_arm), "done": done, "timestep": i,
                                  "time": i * self.agents[self.control_agent_name].env.dt, "dog_action": actions_dog, "arm_action": actions_arm, "rpy": self.agents[self.control_agent_name].env.se.get_rpy()})
@@ -160,7 +180,9 @@ class DeploymentRunner:
                     if logging: self.logger.log(agent_name, info)
 
                     if agent_name == self.control_agent_name:
+                        arm_obs_start = time.perf_counter()
                         control_obs = agent.get_arm_observations()
+                        profile_stats["arm_obs_s"] += time.perf_counter() - arm_obs_start
 
                 # bad orientation emergency stop
                 rpy = self.agents[self.control_agent_name].env.se.get_rpy()
@@ -200,6 +222,39 @@ class DeploymentRunner:
                     while not self.command_profile.state_estimator.right_lower_right_switch_pressed:
                         time.sleep(0.01)
                     self.command_profile.state_estimator.right_lower_right_switch_pressed = False
+
+                profile_stats["loop_s"] += time.perf_counter() - loop_start
+                profile_count += 1
+                if profile_count >= self.profile_print_interval:
+                    avg_loop_s = profile_stats["loop_s"] / profile_count
+                    avg_loop_hz = 1.0 / avg_loop_s if avg_loop_s > 0 else float("inf")
+                    se = self.agents[self.control_agent_name].env.se
+                    lcm_stats = se.get_lcm_debug_snapshot() if hasattr(se, "get_lcm_debug_snapshot") else {}
+
+                    def _fmt_seconds_ms(value):
+                        return "n/a" if value is None else f"{value * 1000.0:.1f}ms"
+
+                    def _fmt_lcm_line(name):
+                        stats = lcm_stats.get(name, {})
+                        return f"{name}:dt={_fmt_seconds_ms(stats.get('interval_s'))},age={_fmt_seconds_ms(stats.get('age_s'))}"
+
+                    print(
+                        "profile | "
+                        f"loop={avg_loop_s * 1000.0:.2f}ms ({avg_loop_hz:.2f}Hz) | "
+                        f"arm_policy={profile_stats['arm_policy_s'] / profile_count * 1000.0:.2f}ms | "
+                        f"dog_obs={profile_stats['dog_obs_s'] / profile_count * 1000.0:.2f}ms | "
+                        f"dog_policy={profile_stats['dog_policy_s'] / profile_count * 1000.0:.2f}ms | "
+                        f"agent.step={profile_stats['step_s'] / profile_count * 1000.0:.2f}ms | "
+                        f"arm_obs={profile_stats['arm_obs_s'] / profile_count * 1000.0:.2f}ms | "
+                        f"{_fmt_lcm_line('imu')} | "
+                        f"{_fmt_lcm_line('leg')} | "
+                        f"{_fmt_lcm_line('arm')} | "
+                        f"{_fmt_lcm_line('rc')} | "
+                        f"{_fmt_lcm_line('vr')}"
+                    )
+                    for key in profile_stats:
+                        profile_stats[key] = 0.0
+                    profile_count = 0
 
             # finally, return to the nominal pose
             control_obs = self.calibrate(wait=False)
