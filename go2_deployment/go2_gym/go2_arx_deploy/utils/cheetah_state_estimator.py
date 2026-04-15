@@ -13,6 +13,10 @@ from go2_arx_deploy.lcm_types.camera_message_lcmt import camera_message_lcmt
 from go2_arx_deploy.lcm_types.camera_message_rect_wide import camera_message_rect_wide
 from go2_arx_deploy.lcm_types.vr_command_lcmt import vr_command_lcmt
 
+REMOTE_CMD_FILTER_RATE = 0.85
+REMOTE_CMD_JUMP_POS_THRESH = 0.05
+REMOTE_CMD_JUMP_ANG_THRESH = 0.2
+
 
 def quat_apply(a, b):
     if not isinstance(a, torch.Tensor):
@@ -138,6 +142,25 @@ def local_xyz_to_lpy(xyz):
     p = np.arctan2(z, horiz)
     yaw = np.arctan2(y_local, x)
     return np.array([l, p, yaw], dtype=np.float64)
+
+
+def wrap_to_pi_np(angle):
+    return (angle + np.pi) % (2 * np.pi) - np.pi
+
+
+def detect_remote_command_jump(previous_pose, current_pose):
+    if previous_pose is None:
+        return False, 0.0, 0.0
+
+    pos_delta = current_pose[:3] - previous_pose[:3]
+    ang_delta = np.array(
+        [wrap_to_pi_np(current_pose[i] - previous_pose[i]) for i in range(3, 6)],
+        dtype=np.float64,
+    )
+    pos_norm = float(np.linalg.norm(pos_delta))
+    ang_norm = float(np.linalg.norm(ang_delta))
+    is_jump = (pos_norm > REMOTE_CMD_JUMP_POS_THRESH) or (ang_norm > REMOTE_CMD_JUMP_ANG_THRESH)
+    return is_jump, pos_norm, ang_norm
 
 class StateEstimator:
     def __init__(self, lc, use_cameras=True):
@@ -433,12 +456,47 @@ class StateEstimator_VR(StateEstimator):
         self.cmd_l = 0.5
         self.cmd_p = 0.2
         self.cmd_y = 0.0
+        self.home_xyz = lpy_to_local_xyz(np.array([self.cmd_l, self.cmd_p, self.cmd_y], dtype=np.float64))
+        self.last_remote_pose_raw = None
+        self.filtered_remote_pose = None
 
 
     def _vr_command_cb(self, channel, data):
         self._mark_lcm_update("vr")
         msg = vr_command_lcmt.decode(data)
         self.delta_xyzrpy = np.array(msg.ee_pose)[:6]
+
+        current_remote_pose = self.delta_xyzrpy.copy()
+        is_jump, pos_norm, ang_norm = detect_remote_command_jump(self.last_remote_pose_raw, current_remote_pose)
+        if is_jump:
+            print(
+                "VR command jump detected | "
+                f"pos_jump={pos_norm:.4f}, ang_jump={ang_norm:.4f} | "
+                f"x={current_remote_pose[0]:.6f}, y={current_remote_pose[1]:.6f}, z={current_remote_pose[2]:.6f}, "
+                f"roll={current_remote_pose[3]:.6f}, pitch={current_remote_pose[4]:.6f}, yaw={current_remote_pose[5]:.6f}"
+            )
+        self.last_remote_pose_raw = current_remote_pose
+
+        delta_pos = current_remote_pose[:3]
+        delta_roll, delta_pitch, delta_yaw = current_remote_pose[3:6]
+        target_xyz = self.home_xyz + delta_pos
+
+        cmd_alpha = float(np.clip(delta_roll, -np.pi * 0.45, np.pi * 0.45))
+        cmd_beta = float(np.clip(delta_pitch, -1.5, 1.5))
+        cmd_gamma = float(np.clip(delta_yaw, -1.4, 1.4))
+        cmd_alpha, cmd_beta, cmd_gamma = rpy_to_abg(cmd_alpha, cmd_beta, cmd_gamma)
+
+        raw_remote_pose_cmd = np.array(
+            [target_xyz[0], target_xyz[1], target_xyz[2], cmd_alpha, cmd_beta, cmd_gamma],
+            dtype=np.float64,
+        )
+        if self.filtered_remote_pose is None:
+            self.filtered_remote_pose = raw_remote_pose_cmd.copy()
+        else:
+            self.filtered_remote_pose = (
+                REMOTE_CMD_FILTER_RATE * self.filtered_remote_pose
+                + (1.0 - REMOTE_CMD_FILTER_RATE) * raw_remote_pose_cmd
+            )
 
 
     def get_command(self):
@@ -447,24 +505,20 @@ class StateEstimator_VR(StateEstimator):
         cmd_vel_y = -1 * self.left_stick[0]  # -1 ~ 1
         cmd_vel_yaw = -1 * self.right_stick[0]  # -1 ~ 1
 
-        delta_pos = self.delta_xyzrpy[:3]
-        delta_roll, delta_pitch, delta_yaw = self.delta_xyzrpy[3:6]
+        if self.filtered_remote_pose is None:
+            filtered_xyz = self.home_xyz.copy()
+            cmd_alpha = 0.0
+            cmd_beta = 0.0
+            cmd_gamma = 0.0
+        else:
+            filtered_xyz = self.filtered_remote_pose[:3]
+            cmd_alpha, cmd_beta, cmd_gamma = self.filtered_remote_pose[3:6]
 
-        # Match the vr_play simulation path: apply the VR delta around the
-        # nominal arm command in Cartesian space, then convert back to l/p/y.
-        home_xyz = lpy_to_local_xyz(np.array([self.cmd_l, self.cmd_p, self.cmd_y], dtype=np.float64))
-        target_xyz = home_xyz + delta_pos
-        cmd_l, cmd_p, cmd_y = local_xyz_to_lpy(target_xyz)
+        cmd_l, cmd_p, cmd_y = local_xyz_to_lpy(filtered_xyz)
 
         cmd_l = float(np.clip(cmd_l, 0.3, 0.8))
         cmd_p = float(np.clip(cmd_p, -np.pi / 3, np.pi / 3))
         cmd_y = float(np.clip(cmd_y, -np.pi / 2, np.pi / 2))
-
-        cmd_alpha = min(max(delta_roll, -np.pi * 0.45), np.pi * 0.45)  # default=0., [-pi/3 ~ pi/3]
-        cmd_beta = min(max(delta_pitch, -1.5), 1.5)  # default=0., [-1.5 ~ 1.5]
-        cmd_gamma = min(max(delta_yaw, -1.4), 1.4) # default=0., [-1.4 ~ 1.4]
-
-        cmd_alpha, cmd_beta, cmd_gamma = rpy_to_abg(cmd_alpha, cmd_beta, cmd_gamma)
 
         cmd_vel_x = np.clip(cmd_vel_x, -1, 1.5)
         cmd_vel_y = np.clip(cmd_vel_y, -0.6, 0.6)

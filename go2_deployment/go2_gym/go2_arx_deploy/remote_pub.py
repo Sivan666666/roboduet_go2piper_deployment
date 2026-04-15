@@ -17,6 +17,15 @@ from go2_arx_deploy.lcm_types.gripper_lcmt import gripper_lcmt
 GLOBAL_IP = "192.168.1.109"
 GLOBAL_PORT = "34567"
 lcm_node = lcm.LCM("udpm://239.255.76.67:7314?ttl=255")
+
+GRIPPER_INPUT_MAX = 4.5
+
+
+def trigger_to_gripper_cmd(trigger_value):
+    trigger_value = float(np.clip(trigger_value, 0.0, 1.0))
+    # Keep the deployment behavior intuitive on the real gripper:
+    # released trigger -> open, squeezed trigger -> close.
+    return (1.0 - trigger_value) * GRIPPER_INPUT_MAX
  
 
 def calibrate(sock: zmq.Socket, start_pose=None):
@@ -37,18 +46,18 @@ def calibrate(sock: zmq.Socket, start_pose=None):
     roll2, pitch2, yaw2 = -count[9], -count[7], count[8]
     
 
-    return np.array([-x1, -y1, -z1, -roll1, -pitch1, -yaw1, 4.5,
-                        -x2, -y2, -z2, -roll2, -pitch2, -yaw2, 4.5]) \
+    return np.array([-x1, -y1, -z1, -roll1, -pitch1, -yaw1, 0.0,
+                        -x2, -y2, -z2, -roll2, -pitch2, -yaw2, 0.0]) \
                             + (start_pose if start_pose is not None else 0)
 
 
 def parser_action(action, offset):
 
-    gripper1 = action[6]
+    gripper1 = trigger_to_gripper_cmd(action[6])
     x1, y1, z1 = -action[5], -action[3], action[4]
     roll1, pitch1, yaw1 = -action[2], -action[0], action[1]
 
-    gripper2 = action[13]
+    gripper2 = trigger_to_gripper_cmd(action[13])
     x2, y2, z2 = -action[12], -action[10], action[11]
     roll2, pitch2, yaw2 = -action[9], -action[7], action[8]
 
@@ -74,7 +83,7 @@ def main():
     arm_pose_msg = vr_command_lcmt()
     gripper_msg = gripper_lcmt()
     
-    start_pos = np.array([0,0,0,0,0,0,4.5])
+    start_pos = np.array([0,0,0,0,0,0,GRIPPER_INPUT_MAX])
     previous_pose = np.zeros(6)
     previous_gripper = 0
     arm_delta = 0.01
