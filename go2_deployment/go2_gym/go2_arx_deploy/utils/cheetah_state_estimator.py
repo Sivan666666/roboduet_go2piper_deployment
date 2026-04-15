@@ -176,6 +176,20 @@ class StateEstimator:
         self.init_time = time.time()
         self.received_first_legdata = False
         self.received_first_armdata = False
+        self._lcm_last_update_time = {
+            "imu": None,
+            "leg": None,
+            "arm": None,
+            "rc": None,
+            "vr": None,
+        }
+        self._lcm_last_interval = {
+            "imu": None,
+            "leg": None,
+            "arm": None,
+            "rc": None,
+            "vr": None,
+        }
 
         self.imu_subscription = self.lc.subscribe("leg_state_estimator_data", self._imu_cb)
         self.legdata_state_subscription = self.lc.subscribe("leg_control_data", self._legdata_cb)
@@ -283,7 +297,27 @@ class StateEstimator:
     def get_camera_right(self):
         return self.camera_image_right
 
+    def _mark_lcm_update(self, key):
+        now = time.monotonic()
+        last_time = self._lcm_last_update_time[key]
+        if last_time is not None:
+            self._lcm_last_interval[key] = now - last_time
+        self._lcm_last_update_time[key] = now
+
+    def get_lcm_debug_snapshot(self):
+        now = time.monotonic()
+        snapshot = {}
+        for key, last_time in self._lcm_last_update_time.items():
+            age = None if last_time is None else now - last_time
+            interval = self._lcm_last_interval[key]
+            snapshot[key] = {
+                "age_s": age,
+                "interval_s": interval,
+            }
+        return snapshot
+
     def _legdata_cb(self, channel, data):
+        self._mark_lcm_update("leg")
         if not self.received_first_legdata:
             self.received_first_legdata = True
             print(f"First legdata: {time.time() - self.init_time}")
@@ -297,6 +331,7 @@ class StateEstimator:
         self.tau_est = np.array(msg.tau_est)
 
     def _armdata_cb(self, channel, data):
+        self._mark_lcm_update("arm")
         if not self.received_first_armdata:
             self.received_first_armdata = True
             print(f"First armdata: {time.time() - self.init_time}")
@@ -307,6 +342,7 @@ class StateEstimator:
 
 
     def _imu_cb(self, channel, data):
+        self._mark_lcm_update("imu")
         msg = state_estimator_lcmt.decode(data)
 
         self.euler = np.array(msg.rpy)
@@ -327,6 +363,7 @@ class StateEstimator:
         pass
 
     def _rc_command_cb(self, channel, data):
+        self._mark_lcm_update("rc")
 
         msg = rc_command_lcmt.decode(data)
 
@@ -379,6 +416,7 @@ class StateEstimator_VR(StateEstimator):
 
 
     def _vr_command_cb(self, channel, data):
+        self._mark_lcm_update("vr")
         msg = vr_command_lcmt.decode(data)
         self.delta_xyzrpy = np.array(msg.ee_pose)[:6]
 
