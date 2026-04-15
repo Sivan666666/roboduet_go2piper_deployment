@@ -6,14 +6,15 @@ import sys
 import numpy as np
 import zmq
 import pickle
+import os
 
-sys.path.append("../")
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from go2_arx_deploy.lcm_types.vr_command_lcmt import vr_command_lcmt
 from go2_arx_deploy.lcm_types.gripper_lcmt import gripper_lcmt
  
 # NOTE This is the ip and port of the pc host connected to vr
-GLOBAL_IP = "192.168.1.126"
+GLOBAL_IP = "192.168.1.109"
 GLOBAL_PORT = "34567"
 lcm_node = lcm.LCM("udpm://239.255.76.67:7314?ttl=255")
  
