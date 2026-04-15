@@ -122,6 +122,23 @@ def rpy_to_abg(roll, pitch, yaw):
 
     return abg
 
+
+def lpy_to_local_xyz(lpy):
+    l, p, yaw = lpy
+    x = l * np.cos(p) * np.cos(yaw)
+    y_local = l * np.cos(p) * np.sin(yaw)
+    z = l * np.sin(p)
+    return np.array([x, y_local, z], dtype=np.float64)
+
+
+def local_xyz_to_lpy(xyz):
+    x, y_local, z = xyz
+    l = np.sqrt(x ** 2 + y_local ** 2 + z ** 2)
+    horiz = np.sqrt(x ** 2 + y_local ** 2)
+    p = np.arctan2(z, horiz)
+    yaw = np.arctan2(y_local, x)
+    return np.array([l, p, yaw], dtype=np.float64)
+
 class StateEstimator:
     def __init__(self, lc, use_cameras=True):
 
@@ -413,6 +430,9 @@ class StateEstimator_VR(StateEstimator):
         super().__init__(lc, use_cameras)
         self.vr_command_subscription = self.lc.subscribe("vr_command", self._vr_command_cb)
         self.delta_xyzrpy = np.zeros(6)
+        self.cmd_l = 0.5
+        self.cmd_p = 0.2
+        self.cmd_y = 0.0
 
 
     def _vr_command_cb(self, channel, data):
@@ -427,23 +447,22 @@ class StateEstimator_VR(StateEstimator):
         cmd_vel_y = -1 * self.left_stick[0]  # -1 ~ 1
         cmd_vel_yaw = -1 * self.right_stick[0]  # -1 ~ 1
 
+        delta_pos = self.delta_xyzrpy[:3]
+        delta_roll, delta_pitch, delta_yaw = self.delta_xyzrpy[3:6]
 
-        delta_x1, delta_y1, delta_z1, delta_roll, delta_pitch, delta_yaw = self.delta_xyzrpy
-        delta_x1 += 0.3
-        delta_l = np.sqrt(delta_x1**2 + delta_y1**2 + delta_z1**2)
-        delta_y = np.arctan2(delta_y1, delta_x1)
-        delta_p = np.arcsin(delta_z1 / delta_l) if delta_l != 0 else 0
+        # Match the vr_play simulation path: apply the VR delta around the
+        # nominal arm command in Cartesian space, then convert back to l/p/y.
+        home_xyz = lpy_to_local_xyz(np.array([self.cmd_l, self.cmd_p, self.cmd_y], dtype=np.float64))
+        target_xyz = home_xyz + delta_pos
+        cmd_l, cmd_p, cmd_y = local_xyz_to_lpy(target_xyz)
 
-
-        cmd_l = min(max(delta_l + 0.2, 0.3), 0.8)  # default=0.5, [0.3 ~ 0.8]
-        cmd_p = min(max(delta_p + 0.3, -np.pi/3), np.pi/3)   # default=0.2, [-pi/3 ~ pi/3]
-        cmd_y = min(max(delta_y, -np.pi/2), np.pi/2)  # default=0., [-pi/2 ~ pi/2]
+        cmd_l = float(np.clip(cmd_l, 0.3, 0.8))
+        cmd_p = float(np.clip(cmd_p, -np.pi / 3, np.pi / 3))
+        cmd_y = float(np.clip(cmd_y, -np.pi / 2, np.pi / 2))
 
         cmd_alpha = min(max(delta_roll, -np.pi * 0.45), np.pi * 0.45)  # default=0., [-pi/3 ~ pi/3]
         cmd_beta = min(max(delta_pitch, -1.5), 1.5)  # default=0., [-1.5 ~ 1.5]
         cmd_gamma = min(max(delta_yaw, -1.4), 1.4) # default=0., [-1.4 ~ 1.4]
-
-        cmd_alpha, cmd_beta, cmd_gamma = rpy_to_abg(cmd_alpha, cmd_beta, cmd_gamma)
 
         cmd_alpha, cmd_beta, cmd_gamma = rpy_to_abg(cmd_alpha, cmd_beta, cmd_gamma)
 

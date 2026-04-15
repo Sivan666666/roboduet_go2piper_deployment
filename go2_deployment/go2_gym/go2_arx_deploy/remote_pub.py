@@ -112,15 +112,21 @@ def main():
                     action, a, b, x, y, _,_ = get_handles_msg(sock, offset)
                     if x == 1:
                         arm_pose_msg.ee_pose = start_pos[0:6]
-                        
-                        lcm_node.publish("arm_control_data", arm_pose_msg.encode())
+                        gripper_msg.gripper_cmd = start_pos[6]
+                        previous_pose = start_pos[0:6].copy()
+                        previous_gripper = start_pos[6]
+                        lcm_node.publish("vr_command", arm_pose_msg.encode())
+                        lcm_node.publish("gripper_command", gripper_msg.encode())
 
                         break
                     
                     if a == 1:
                         arm_pose_msg.ee_pose = start_pos[0:6]
-                        
-                        lcm_node.publish("arm_control_data", arm_pose_msg.encode())
+                        gripper_msg.gripper_cmd = start_pos[6]
+                        previous_pose = start_pos[0:6].copy()
+                        previous_gripper = start_pos[6]
+                        lcm_node.publish("vr_command", arm_pose_msg.encode())
+                        lcm_node.publish("gripper_command", gripper_msg.encode())
 
                         return 0
                 break
