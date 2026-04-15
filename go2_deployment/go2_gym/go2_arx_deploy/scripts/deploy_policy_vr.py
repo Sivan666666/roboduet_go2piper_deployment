@@ -18,7 +18,7 @@ import pathlib
 
 lc = lcm.LCM("udpm://239.255.76.67:7314?ttl=255")
 ckpt_path = "runs/collision_roboduet/2026-04-09/my_test_v8"
-ckpt_id = "040000"
+ckpt_id = "080000"
 
 device = "cuda"
 PIPER_DEFAULT_JOINT_ANGLES = {

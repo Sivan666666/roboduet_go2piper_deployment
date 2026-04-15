@@ -268,7 +268,7 @@ def build_argparser():
     parser.add_argument(
         "--move-speed-rate",
         type=int,
-        default=30,
+        default=80,
         help="Piper MOVE J speed percentage passed to MotionCtrl_2",
     )
     parser.add_argument(
@@ -322,7 +322,7 @@ def build_argparser():
     parser.add_argument(
         "--log-interval",
         type=float,
-        default=0.5,
+        default=0,
         help="Seconds between debug logs; set <= 0 to disable",
     )
     parser.set_defaults(start_joints=DEFAULT_START_JOINTS.copy())

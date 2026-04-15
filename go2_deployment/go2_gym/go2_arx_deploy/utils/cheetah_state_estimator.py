@@ -409,8 +409,8 @@ class StateEstimator_VR(StateEstimator):
 
         cmd_alpha, cmd_beta, cmd_gamma = rpy_to_abg(cmd_alpha, cmd_beta, cmd_gamma)
 
-        cmd_vel_x = np.clip(cmd_vel_x, -0.2, 1.5)
-        cmd_vel_y = np.clip(cmd_vel_y, -0.2, 0.2)
+        cmd_vel_x = np.clip(cmd_vel_x, -1, 1.5)
+        cmd_vel_y = np.clip(cmd_vel_y, -0.6, 0.6)
         cmd_vel_yaw = np.clip(cmd_vel_yaw, -1.5, 1.5)
 
         return np.array([cmd_vel_x, cmd_vel_y, cmd_vel_yaw, cmd_l, cmd_p, cmd_y, cmd_alpha, cmd_beta, cmd_gamma])
