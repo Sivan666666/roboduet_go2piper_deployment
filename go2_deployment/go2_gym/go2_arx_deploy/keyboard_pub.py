@@ -24,7 +24,7 @@ HOME_RPY = np.array([0.0, 0.0, 0.0], dtype=np.float64)
 HOME_GRIPPER = 4.5
 
 BODY_STEP = 0.1
-ARM_L_STEP = 0.05
+ARM_POS_STEP = 0.05
 ARM_ANGLE_STEP = 0.1
 GRIPPER_STEP = 0.3
 
@@ -53,10 +53,10 @@ Base commands:
   7 / 9 : turn left / right
   0     : zero base velocity
 
-Arm Cartesian commands:
-  I / K : arm forward / backward
-  U / O : arm up / down
-  J / L : arm left / right
+Arm Cartesian delta commands:
+  I / K : delta x forward / backward
+  U / O : delta z up / down
+  J / L : delta y left / right
 
 Arm orientation commands:
   W / S : pitch down / up
@@ -80,6 +80,15 @@ def lpy_to_local_xyz(lpy):
     y = l * np.cos(pitch) * np.sin(yaw)
     z = l * np.sin(pitch)
     return np.array([x, y, z], dtype=np.float64)
+
+
+def local_xyz_to_lpy(xyz):
+    x, y, z = np.asarray(xyz, dtype=np.float64)
+    l = np.sqrt(x ** 2 + y ** 2 + z ** 2)
+    horiz = np.sqrt(x ** 2 + y ** 2)
+    pitch = np.arctan2(z, horiz)
+    yaw = np.arctan2(y, x)
+    return np.array([l, pitch, yaw], dtype=np.float64)
 
 
 def clamp(value, bounds):
@@ -114,19 +123,32 @@ class RawKeyboard:
 class KeyboardTeleopState:
     def __init__(self):
         self.body = np.zeros(3, dtype=np.float64)
-        self.arm_lpy = HOME_LPY.copy()
+        self.arm_delta_xyz = np.zeros(3, dtype=np.float64)
         self.arm_rpy = HOME_RPY.copy()
         self.gripper = float(HOME_GRIPPER)
         self.home_xyz = lpy_to_local_xyz(HOME_LPY)
 
     def reset(self):
         self.body[:] = 0.0
-        self.arm_lpy[:] = HOME_LPY
+        self.arm_delta_xyz[:] = 0.0
         self.arm_rpy[:] = HOME_RPY
         self.gripper = float(HOME_GRIPPER)
 
     def zero_base(self):
         self.body[:] = 0.0
+
+    def _apply_delta_xyz(self, axis, step):
+        candidate_delta = self.arm_delta_xyz.copy()
+        candidate_delta[axis] += step
+        candidate_target_xyz = self.home_xyz + candidate_delta
+
+        candidate_lpy = local_xyz_to_lpy(candidate_target_xyz)
+        candidate_lpy[0] = clamp(candidate_lpy[0], ARM_LIMITS["l"])
+        candidate_lpy[1] = clamp(candidate_lpy[1], ARM_LIMITS["p"])
+        candidate_lpy[2] = clamp(candidate_lpy[2], ARM_LIMITS["y"])
+
+        clipped_target_xyz = lpy_to_local_xyz(candidate_lpy)
+        self.arm_delta_xyz = clipped_target_xyz - self.home_xyz
 
     def apply_key(self, key):
         changed = False
@@ -155,22 +177,22 @@ class KeyboardTeleopState:
             changed = True
 
         elif key == "i":
-            self.arm_lpy[0] = clamp(self.arm_lpy[0] + ARM_L_STEP, ARM_LIMITS["l"])
+            self._apply_delta_xyz(0, ARM_POS_STEP)
             changed = True
         elif key == "k":
-            self.arm_lpy[0] = clamp(self.arm_lpy[0] - ARM_L_STEP, ARM_LIMITS["l"])
+            self._apply_delta_xyz(0, -ARM_POS_STEP)
             changed = True
         elif key == "u":
-            self.arm_lpy[1] = clamp(self.arm_lpy[1] + ARM_ANGLE_STEP, ARM_LIMITS["p"])
+            self._apply_delta_xyz(2, ARM_POS_STEP)
             changed = True
         elif key == "o":
-            self.arm_lpy[1] = clamp(self.arm_lpy[1] - ARM_ANGLE_STEP, ARM_LIMITS["p"])
+            self._apply_delta_xyz(2, -ARM_POS_STEP)
             changed = True
         elif key == "j":
-            self.arm_lpy[2] = clamp(self.arm_lpy[2] + ARM_ANGLE_STEP, ARM_LIMITS["y"])
+            self._apply_delta_xyz(1, ARM_POS_STEP)
             changed = True
         elif key == "l":
-            self.arm_lpy[2] = clamp(self.arm_lpy[2] - ARM_ANGLE_STEP, ARM_LIMITS["y"])
+            self._apply_delta_xyz(1, -ARM_POS_STEP)
             changed = True
 
         elif key == "w":
@@ -205,9 +227,7 @@ class KeyboardTeleopState:
         return changed
 
     def build_vr_pose(self):
-        target_xyz = lpy_to_local_xyz(self.arm_lpy)
-        delta_xyz = target_xyz - self.home_xyz
-        return np.concatenate((delta_xyz, self.arm_rpy), axis=0)
+        return np.concatenate((self.arm_delta_xyz, self.arm_rpy), axis=0)
 
     def build_rc_msg(self):
         msg = rc_command_lcmt()
@@ -229,9 +249,10 @@ class KeyboardTeleopState:
 
     def format_status(self):
         pose = self.build_vr_pose()
+        target_lpy = local_xyz_to_lpy(self.home_xyz + self.arm_delta_xyz)
         return (
             f"base | vx: {self.body[0]: .2f}, vy: {self.body[1]: .2f}, yaw: {self.body[2]: .2f}\n"
-            f"arm  | l: {self.arm_lpy[0]: .2f}, p: {self.arm_lpy[1]: .2f}, y: {self.arm_lpy[2]: .2f}, "
+            f"arm  | l: {target_lpy[0]: .2f}, p: {target_lpy[1]: .2f}, y: {target_lpy[2]: .2f}, "
             f"roll: {self.arm_rpy[0]: .2f}, pitch: {self.arm_rpy[1]: .2f}, yaw: {self.arm_rpy[2]: .2f}\n"
             f"delta| x: {pose[0]: .3f}, y: {pose[1]: .3f}, z: {pose[2]: .3f}, "
             f"roll: {pose[3]: .3f}, pitch: {pose[4]: .3f}, yaw: {pose[5]: .3f}\n"

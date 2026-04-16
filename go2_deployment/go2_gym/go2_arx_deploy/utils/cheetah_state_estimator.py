@@ -13,11 +13,11 @@ from go2_arx_deploy.lcm_types.camera_message_lcmt import camera_message_lcmt
 from go2_arx_deploy.lcm_types.camera_message_rect_wide import camera_message_rect_wide
 from go2_arx_deploy.lcm_types.vr_command_lcmt import vr_command_lcmt
 
-REMOTE_CMD_POS_FILTER_RATE = 0.92
-REMOTE_CMD_ANG_FILTER_RATE = 0.94
+REMOTE_CMD_POS_FILTER_RATE = 0.9
+REMOTE_CMD_ANG_FILTER_RATE = 0.9
 REMOTE_CMD_JUMP_POS_THRESH = 0.05
 REMOTE_CMD_JUMP_ANG_THRESH = 0.2
-REMOTE_CMD_MAX_POS_STEP = 0.012
+REMOTE_CMD_MAX_POS_STEP = 0.02
 REMOTE_CMD_MAX_ANG_STEP = 0.06
 
 
