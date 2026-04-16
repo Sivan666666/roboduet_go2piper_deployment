@@ -6,4 +6,4 @@ __pycache__
 */build
 go2_deployment/go2_gym/go2_arx_deploy/unitree_legged_sdk_bin/build
 **/runs
-*.pkl*
+**.png
