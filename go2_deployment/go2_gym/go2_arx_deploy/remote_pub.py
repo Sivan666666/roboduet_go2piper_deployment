@@ -19,6 +19,7 @@ GLOBAL_PORT = "34567"
 lcm_node = lcm.LCM("udpm://239.255.76.67:7314?ttl=255")
 
 GRIPPER_INPUT_MAX = 4.5
+LEFT_ARM_FIELD_NAMES = ["x", "y", "z", "roll", "pitch", "yaw"]
 
 
 def trigger_to_gripper_cmd(trigger_value):
@@ -26,6 +27,11 @@ def trigger_to_gripper_cmd(trigger_value):
     # Keep the deployment behavior intuitive on the real gripper:
     # released trigger -> open, squeezed trigger -> close.
     return (1.0 - trigger_value) * GRIPPER_INPUT_MAX
+
+
+def format_left_pose(pose):
+    values = [f"{name}: {value:.3f}" for name, value in zip(LEFT_ARM_FIELD_NAMES, pose)]
+    return "left | " + ", ".join(values)
  
 
 def calibrate(sock: zmq.Socket, start_pose=None):
@@ -147,7 +153,7 @@ def main():
                 gripper_msg.gripper_cmd = action[6]
                 previous_pose = action[0:6]
                 lcm_node.publish("vr_command", arm_pose_msg.encode())
-                print('left', arm_pose_msg.ee_pose)
+                print(format_left_pose(arm_pose_msg.ee_pose))
             
             if np.abs(previous_gripper - action[6]) > gripper_delta:
                 gripper_msg.gripper_cmd = action[6]
