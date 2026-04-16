@@ -268,7 +268,7 @@ def build_argparser():
     parser.add_argument(
         "--move-speed-rate",
         type=int,
-        default=80,
+        default=30,
         help="Piper MOVE J speed percentage passed to MotionCtrl_2",
     )
     parser.add_argument(
