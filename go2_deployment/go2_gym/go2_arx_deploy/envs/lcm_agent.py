@@ -162,6 +162,9 @@ class LCMAgent():
         self.plan_actions = torch.zeros(2, dtype=torch.float32)
 
         self.last_arm_real_target = None
+        self.last_dog_joint_pos_target = np.zeros(12, dtype=np.float64)
+        self.last_arm_joint_pos_target = np.zeros(6, dtype=np.float64)
+        self.last_arm_joint_pos_command_filtered = np.zeros(7, dtype=np.float64)
 
     def _resolve_arm_joint_name(self, candidates):
         default_joint_angles = self.cfg["init_state"]["default_joint_angles"]
@@ -245,6 +248,7 @@ class LCMAgent():
             (action[:12].detach().cpu().numpy() * self.cfg["control"]["action_scale"]).flatten()
         self.joint_pos_target[[0, 3, 6, 9]] *= self.cfg["control"]["hip_scale_reduction"]
         self.joint_pos_target += self.default_dof_pos[:12]
+        self.last_dog_joint_pos_target = self.joint_pos_target.copy()
         joint_pos_target = self.joint_pos_target[self.joint_idxs]
         self.joint_vel_target = np.zeros(12)
 
@@ -266,6 +270,7 @@ class LCMAgent():
         self.joint_pos_target = \
             (action[12:18].detach().cpu().numpy() * self.cfg["control"]["action_scale"]).flatten()
         self.joint_pos_target += self.default_dof_pos[12:18]
+        self.last_arm_joint_pos_target = self.joint_pos_target.copy()
         joint_pos_target = np.zeros(12)
         joint_pos_target[:6] = self.joint_pos_target
 
@@ -279,6 +284,7 @@ class LCMAgent():
             self.last_arm_real_target = joint_pos_target[:7]
         else:
             self.last_arm_real_target = (1 - filter_rate) * self.last_arm_real_target + filter_rate * joint_pos_target[:7]
+        self.last_arm_joint_pos_command_filtered = self.last_arm_real_target.copy()
         
         command_for_robot.q_arm_des = self.last_arm_real_target
 
@@ -343,6 +349,9 @@ class LCMAgent():
         infos = {"joint_pos": self.dof_pos[np.newaxis, :],
                  "joint_vel": self.dof_vel[np.newaxis, :],
                  "joint_pos_target": self.joint_pos_target[np.newaxis, :],
+                 "dog_joint_pos_target": self.last_dog_joint_pos_target[np.newaxis, :],
+                 "arm_joint_pos_target": self.last_arm_joint_pos_target[np.newaxis, :],
+                 "arm_joint_pos_command_filtered": self.last_arm_joint_pos_command_filtered[np.newaxis, :],
                  "joint_vel_target": self.joint_vel_target[np.newaxis, :],
                  "body_linear_vel": self.body_linear_vel[np.newaxis, :],
                  "body_angular_vel": self.body_angular_vel[np.newaxis, :],

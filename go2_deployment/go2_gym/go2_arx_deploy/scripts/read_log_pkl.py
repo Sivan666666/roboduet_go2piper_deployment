@@ -116,6 +116,60 @@ def cmds_to_ee_xyzrpy(cmds):
     return np.concatenate((ee_xyz, ee_rpy), axis=1)
 
 
+def resolve_default_joint(default_joint_angles, *candidates):
+    for name in candidates:
+        if name in default_joint_angles:
+            return float(default_joint_angles[name])
+    raise KeyError(f"Missing default joint angle for candidates: {candidates}")
+
+
+def reconstruct_targets(cfg, infos):
+    control = cfg["control"]
+    action_scale = float(control["action_scale"])
+    hip_scale_reduction = float(control["hip_scale_reduction"])
+    default_joint_angles = cfg["init_state"]["default_joint_angles"]
+
+    dog_joint_names = [
+        "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint",
+        "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
+        "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint",
+        "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint",
+    ]
+    dog_default = np.array([default_joint_angles[name] for name in dog_joint_names], dtype=np.float64)
+    arm_default = np.array([
+        resolve_default_joint(default_joint_angles, "piper_joint1", "zarx_j1"),
+        resolve_default_joint(default_joint_angles, "piper_joint2", "zarx_j2"),
+        resolve_default_joint(default_joint_angles, "piper_joint3", "zarx_j3"),
+        resolve_default_joint(default_joint_angles, "piper_joint4", "zarx_j4"),
+        resolve_default_joint(default_joint_angles, "piper_joint5", "zarx_j5"),
+        resolve_default_joint(default_joint_angles, "piper_joint6", "zarx_j6"),
+    ], dtype=np.float64)
+
+    if "dog_joint_pos_target" in infos[0]:
+        dog_target = to_series(infos, "dog_joint_pos_target")
+        if dog_target.ndim == 1:
+            dog_target = dog_target[:, None]
+    else:
+        dog_action = to_series(infos, "dog_action")[:, :12]
+        dog_target = dog_action * action_scale
+        dog_target[:, [0, 3, 6, 9]] *= hip_scale_reduction
+        dog_target += dog_default
+
+    if "arm_joint_pos_command_filtered" in infos[0]:
+        arm_target = to_series(infos, "arm_joint_pos_command_filtered")[:, :6]
+    elif "arm_joint_pos_target" in infos[0]:
+        arm_target = to_series(infos, "arm_joint_pos_target")
+    elif "joint_pos_target" in infos[0]:
+        arm_target = to_series(infos, "joint_pos_target")
+        if arm_target.ndim == 1:
+            arm_target = arm_target[:, None]
+    else:
+        arm_action = to_series(infos, "arm_action")[:, :6]
+        arm_target = arm_action * action_scale + arm_default
+
+    return dog_target, arm_target
+
+
 def pad_range(vmin, vmax):
     if not np.isfinite(vmin) or not np.isfinite(vmax):
         return -1.0, 1.0
@@ -202,11 +256,11 @@ def draw_dashed_polyline(draw, points, color, width=2, dash_px=8, gap_px=5):
             traveled += step
 
 
-def draw_joint_overlay_panel(draw, font, time_axis, action_series, actual_series, box, title):
+def draw_joint_overlay_panel(draw, font, time_axis, target_series, actual_series, box, title):
     draw_plot_box(draw, box)
     y_min, y_max = pad_range(
-        float(min(np.min(action_series), np.min(actual_series))),
-        float(max(np.max(action_series), np.max(actual_series))),
+        float(min(np.min(target_series), np.min(actual_series))),
+        float(max(np.max(target_series), np.max(actual_series))),
     )
     left, top, right, bottom = box
     draw_text(draw, (left, top - 14), title, font)
@@ -217,14 +271,14 @@ def draw_joint_overlay_panel(draw, font, time_axis, action_series, actual_series
     draw.line((left + 6, legend_y + 4, left + 22, legend_y + 4), fill=ACTUAL_COLOR, width=2)
     draw_text(draw, (left + 26, legend_y), "actual", font, fill=ACTUAL_COLOR)
     draw_dashed_polyline(draw, [(left + 92, legend_y + 4), (left + 108, legend_y + 4)], color=ACTION_COLOR, width=2)
-    draw_text(draw, (left + 114, legend_y), "action", font, fill=ACTION_COLOR)
+    draw_text(draw, (left + 114, legend_y), "target", font, fill=ACTION_COLOR)
 
     actual_points = map_points(time_axis, actual_series, box, y_min, y_max)
-    action_points = map_points(time_axis, action_series, box, y_min, y_max)
+    target_points = map_points(time_axis, target_series, box, y_min, y_max)
     if len(actual_points) >= 2:
         draw.line(actual_points, fill=ACTUAL_COLOR, width=2)
-    if len(action_points) >= 2:
-        draw_dashed_polyline(draw, action_points, color=ACTION_COLOR, width=2)
+    if len(target_points) >= 2:
+        draw_dashed_polyline(draw, target_points, color=ACTION_COLOR, width=2)
 
 
 def create_grid_figure(time_axis, data, labels, title, cols=3, panel_width=420, panel_height=220):
@@ -249,7 +303,7 @@ def create_grid_figure(time_axis, data, labels, title, cols=3, panel_width=420, 
     return image
 
 
-def create_joint_tracking_figure(time_axis, action_data, actual_data, labels, title, cols=3, panel_width=420, panel_height=220):
+def create_joint_tracking_figure(time_axis, target_data, actual_data, labels, title, cols=3, panel_width=420, panel_height=220):
     rows = int(math.ceil(len(labels) / cols))
     margin_x = 28
     margin_y = 36
@@ -263,7 +317,7 @@ def create_joint_tracking_figure(time_axis, action_data, actual_data, labels, ti
     draw.line((margin_x, legend_y + 5, margin_x + 18, legend_y + 5), fill=ACTUAL_COLOR, width=2)
     draw_text(draw, (margin_x + 24, legend_y), "actual joint state", font, fill=ACTUAL_COLOR)
     draw_dashed_polyline(draw, [(margin_x + 180, legend_y + 5), (margin_x + 198, legend_y + 5)], color=ACTION_COLOR, width=2)
-    draw_text(draw, (margin_x + 206, legend_y), "action", font, fill=ACTION_COLOR)
+    draw_text(draw, (margin_x + 206, legend_y), "joint target", font, fill=ACTION_COLOR)
 
     for idx, label in enumerate(labels):
         row = idx // cols
@@ -275,7 +329,7 @@ def create_joint_tracking_figure(time_axis, action_data, actual_data, labels, ti
             draw,
             font,
             time_axis,
-            action_data[:, idx],
+            target_data[:, idx],
             actual_data[:, idx],
             box,
             label,
@@ -283,9 +337,9 @@ def create_joint_tracking_figure(time_axis, action_data, actual_data, labels, ti
     return image
 
 
-def crop_tracking_data(time_axis, action_data, actual_data):
-    start, end = estimate_active_window(action_data, actual_data)
-    return time_axis[start:end], action_data[start:end], actual_data[start:end]
+def crop_tracking_data(time_axis, target_data, actual_data):
+    start, end = estimate_active_window(target_data, actual_data)
+    return time_axis[start:end], target_data[start:end], actual_data[start:end]
 
 
 def save_image(image, path):
@@ -322,20 +376,19 @@ def main():
     if robot_name not in log_data:
         raise KeyError(f"Robot '{robot_name}' not found. Available: {list(log_data.keys())}")
 
-    _, infos = log_data[robot_name]
+    cfg, infos = log_data[robot_name]
     if not infos:
         raise ValueError(f"log file contains no timestep infos for robot '{robot_name}'")
 
     time_axis = get_time_axis(infos)
     cmds = to_series(infos, "cmds_vxyz_lpyrpy")
-    arm_action = to_series(infos, "arm_action")
-    dog_action = to_series(infos, "dog_action")
     joint_pos = to_series(infos, "joint_pos")
+    dog_target, arm_target = reconstruct_targets(cfg, infos)
 
-    arm_action = arm_action[:, :6]
     arm_joint_state = joint_pos[:, 12:18]
     dog_joint_state = joint_pos[:, :12]
-    dog_action = dog_action[:, DOG_LEG_SLICE]
+    arm_target = arm_target[:, :6]
+    dog_target = dog_target[:, DOG_LEG_SLICE]
     dog_joint_state = dog_joint_state[:, DOG_LEG_SLICE]
 
     output_dir = Path(args.output_dir).resolve() if args.output_dir else log_path.parent
@@ -356,22 +409,22 @@ def main():
         title=f"{robot_name} | end effector command xyzrpy",
         cols=3,
     )
-    arm_time_axis, arm_action_plot, arm_joint_state_plot = crop_tracking_data(time_axis, arm_action, arm_joint_state)
+    arm_time_axis, arm_target_plot, arm_joint_state_plot = crop_tracking_data(time_axis, arm_target, arm_joint_state)
     arm_image = create_joint_tracking_figure(
         arm_time_axis,
-        arm_action_plot,
+        arm_target_plot,
         arm_joint_state_plot,
         ARM_JOINT_LABELS,
-        title=f"{robot_name} | arm action vs actual arm joint state",
+        title=f"{robot_name} | arm joint target vs actual arm joint state",
         cols=1,
     )
-    dog_time_axis, dog_action_plot, dog_joint_state_plot = crop_tracking_data(time_axis, dog_action, dog_joint_state)
+    dog_time_axis, dog_target_plot, dog_joint_state_plot = crop_tracking_data(time_axis, dog_target, dog_joint_state)
     dog_image = create_joint_tracking_figure(
         dog_time_axis,
-        dog_action_plot,
+        dog_target_plot,
         dog_joint_state_plot,
         DOG_LEG_JOINT_LABELS,
-        title=f"{robot_name} | FL leg action vs actual joint state",
+        title=f"{robot_name} | FL leg joint target vs actual joint state",
         cols=1,
     )
 
