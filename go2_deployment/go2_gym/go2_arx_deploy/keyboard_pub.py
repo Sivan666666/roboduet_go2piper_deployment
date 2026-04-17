@@ -24,7 +24,7 @@ HOME_RPY = np.array([0.0, 0.0, 0.0], dtype=np.float64)
 HOME_GRIPPER = 4.5
 
 BODY_STEP = 0.1
-ARM_POS_STEP = 0.05
+ARM_POS_STEP = 0.02
 ARM_ANGLE_STEP = 0.1
 GRIPPER_STEP = 0.3
 
