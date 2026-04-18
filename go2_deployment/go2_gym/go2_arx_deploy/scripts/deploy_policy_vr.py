@@ -17,8 +17,8 @@ from go2_arx_deploy.envs.dog_ac import DogActorCritic
 import pathlib
 
 lc = lcm.LCM("udpm://239.255.76.67:7314?ttl=255")
-ckpt_path = "runs/collision_roboduet/2026-04-09/my_test_v8"
-ckpt_id = "080000"
+ckpt_path = "runs/ps1_roboduet_adjust_kp/2026-04-08/auto_train/235952.251636_seed3899"
+ckpt_id = "035200"
 
 device = "cuda"
 PIPER_DEFAULT_JOINT_ANGLES = {
