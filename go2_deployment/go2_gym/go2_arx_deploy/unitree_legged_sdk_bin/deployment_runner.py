@@ -205,14 +205,9 @@ class DeploymentRunner:
                         print("SAVE LOG")
                         self.is_currently_probing = False
                         self.agents[self.control_agent_name].set_probing(False)
-                        # calibrate, log, and then resume control
-                        control_obs = self.calibrate(wait=False)
                         self.logger.save(self.log_filename)
                         self.init_log_filename()
                         self.logger.reset()
-                        time.sleep(1)
-                        control_obs = self.agents[self.control_agent_name].reset()
-                        control_obs = self.agents[self.control_agent_name].get_arm_observations()
                     self.command_profile.state_estimator.left_lower_left_switch_pressed = False
 
                 if self.command_profile.state_estimator.right_lower_right_switch_pressed:

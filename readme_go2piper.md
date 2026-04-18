@@ -17,7 +17,7 @@ Rebuild after any modification to:
 Commands:
 
 ```bash
-cd /home/sivan/whole_body/roboduet_go2piper_deployment/go2_deployment/go2_gym/go2_arx_deploy/unitree_legged_sdk_bin
+cd /home/unitree/Downloads/roboduet_go2piper_deployment/go2_deployment/go2_gym/go2_arx_deploy/unitree_legged_sdk_bin
 bash make.sh
 ```
 
@@ -38,14 +38,14 @@ Use separate terminals. Recommended startup order:
 Normal:
 
 ```bash
-cd /home/sivan/whole_body/roboduet_go2piper_deployment/go2_deployment/go2_gym/go2_arx_deploy/unitree_legged_sdk_bin
+cd /home/unitree/Downloads/roboduet_go2piper_deployment/go2_deployment/go2_gym/go2_arx_deploy/unitree_legged_sdk_bin
 sudo ./lcm_position_vr_go2 eth0
 ```
 
 With front leg motor position print:
 
 ```bash
-cd /home/sivan/whole_body/roboduet_go2piper_deployment/go2_deployment/go2_gym/go2_arx_deploy/unitree_legged_sdk_bin
+cd /home/unitree/Downloads/roboduet_go2piper_deployment/go2_deployment/go2_gym/go2_arx_deploy/unitree_legged_sdk_bin
 sudo ./lcm_position_vr_go2 eth0 --printmotor
 ```
 
@@ -58,14 +58,14 @@ Notes:
 ## 4. Terminal 2: Piper Bridge
 
 ```bash
-cd /home/sivan/whole_body/roboduet_go2piper_deployment
+cd /home/unitree/Downloads/roboduet_go2piper_deployment
 python3 go2_deployment/go2_gym/go2_arx_deploy/piper_bridge.py --can-name can0
 ```
 
 If `can0` requires elevated permission:
 
 ```bash
-cd /home/sivan/whole_body/roboduet_go2piper_deployment
+cd /home/unitree/Downloads/roboduet_go2piper_deployment
 sudo -E $(which python3) go2_deployment/go2_gym/go2_arx_deploy/piper_bridge.py --can-name can0
 ```
 
@@ -86,7 +86,7 @@ What it does:
 ## 5. Terminal 3: RL Policy
 
 ```bash
-cd /home/sivan/whole_body/roboduet_go2piper_deployment
+cd /home/unitree/Downloads/roboduet_go2piper_deployment
 python3 go2_deployment/go2_gym/go2_arx_deploy/scripts/deploy_policy_vr.py
 ```
 
@@ -94,22 +94,66 @@ python3 go2_deployment/go2_gym/go2_arx_deploy/scripts/deploy_policy_vr.py
 ## 6. Terminal 4: VR Receiver
 
 ```bash
-cd /home/sivan/whole_body/roboduet_go2piper_deployment
+cd /home/unitree/Downloads/roboduet_go2piper_deployment
 python3 go2_deployment/go2_gym/go2_arx_deploy/remote_pub.py
 ```
 
 
-## 7. Terminal 5: VR Streaming Sender
+## 7. Terminal 5: Keyboard Receiver
+
+Run this instead of `remote_pub.py` when you want keyboard input instead of VR:
+
+```bash
+cd /home/unitree/Downloads/roboduet_go2piper_deployment
+python3 go2_deployment/go2_gym/go2_arx_deploy/keyboard_pub.py
+```
+
+If you only want keyboard arm control and do not want to publish base `rc_command`:
+
+```bash
+cd /home/unitree/Downloads/roboduet_go2piper_deployment
+python3 go2_deployment/go2_gym/go2_arx_deploy/keyboard_pub.py --arm-only
+```
+
+Keyboard mapping:
+
+- base:
+  - `8 / 5`: forward / backward
+  - `4 / 6`: move left / right
+  - `7 / 9`: turn left / right
+  - `0`: zero base velocity
+- arm Cartesian delta:
+  - `I / K`: `delta x` forward / backward
+  - `J / L`: `delta y` left / right
+  - `U / O`: `delta z` up / down
+- arm orientation:
+  - `W / S`: pitch down / up
+  - `A / D`: roll left / right
+  - `Q / E`: yaw left / right
+- gripper:
+  - `N / M`: open / close
+- utility:
+  - `R`: reset base, arm, and gripper to home
+  - `H`: print help
+  - `X`: exit
+
+Notes:
+
+- Do not run `remote_pub.py` and `keyboard_pub.py` at the same time.
+- `keyboard_pub.py` publishes the same `vr_command` / `gripper_command` interface used by the VR path.
+
+
+## 8. Terminal 6: VR Streaming Sender
 
 Run this on the machine connected to the VR headset / SteamVR:
 
 ```bash
-cd /home/sivan/whole_body/roboduet_go2piper_deployment
+cd /home/unitree/Downloads/roboduet_go2piper_deployment
 python3 vr_streaming.py
 ```
 
 
-## 8. Quick Runtime Summary
+## 9. Quick Runtime Summary
 
 - `lcm_position_vr_go2`:
   - reads Go2 lowstate
@@ -126,9 +170,26 @@ python3 vr_streaming.py
 - `cheetah_state_estimator.py`:
   - reads Go2 leg state from `leg_control_data`
   - reads Piper arm state from `piper_arm_feedback`
+  - reads arm teleop commands from `vr_command`
+  - reads gripper commands from `gripper_command`
+  - reads base teleop commands from `rc_command`
 
 
-## 9. Common Problems
+## 10. Logging
+
+- Hand controller mode:
+  - press `L2` once: `START LOGGING`
+  - press `L2` again: `SAVE LOG`
+- Keyboard mode:
+  - there is currently no dedicated keyboard logging key
+  - logging still depends on the `left_lower_left_switch` / `L2` path in `rc_command`
+- Current behavior after the recent change:
+  - second `L2` only saves the log
+  - it no longer calls `calibrate(wait=False)`
+  - it no longer sends the robot back to the calibration pose
+
+
+## 11. Common Problems
 
 ### `No module named lcm`
 
@@ -156,6 +217,6 @@ Check:
 You probably forgot to rebuild:
 
 ```bash
-cd /home/sivan/whole_body/roboduet_go2piper_deployment/go2_deployment/go2_gym/go2_arx_deploy/unitree_legged_sdk_bin
+cd /home/unitree/Downloads/roboduet_go2piper_deployment/go2_deployment/go2_gym/go2_arx_deploy/unitree_legged_sdk_bin
 bash make.sh
 ```
